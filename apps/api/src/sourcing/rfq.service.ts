@@ -284,6 +284,19 @@ export type ReissueRfqInput = {
   deadlineAt?: string;
 };
 
+/**
+ * Post-tender input. No vendor list — an open tender has no roster; every
+ * eligible vendor may bid. `deadlineAt` is required because it closes bidding.
+ */
+export type PostTenderInput = {
+  deadlineAt: string;
+  title?: string;
+  /** Requirement / terms text shown to bidders. */
+  notes?: string;
+  currency?: string;
+  incoterm?: string;
+};
+
 /** SHA-256 of a raw invitation token, hex. The raw token is never stored. */
 function hashToken(raw: string): string {
   return createHash('sha256').update(raw).digest('hex');
@@ -688,6 +701,178 @@ export class RfqService {
     }
 
     return this.db.withTransaction({ userId, role, costCenterIds }, async (run) => {
+      const p = await this.preflightNewRfq(run, prId);
+
+      const { vendorIds, shortfall, warnings } = await this.resolveVendors(run, prId, body.vendorIds);
+
+      if (body.singleSource && !(body.singleSourceJustification || '').trim()) {
+        throw new BadRequestException(
+          'a single-source justification is required when single_source is set',
+        );
+      }
+
+      const rfq = await this.insertRfqWithLines(run, p, userId, {
+        mode: 'invited',
+        // rfq_check: deadline_at >= created_at + 24h. Display-only per Q2.
+        deadline: this.resolveDeadline(body.deadlineAt),
+        title: body.title,
+        currency: body.currency,
+        incoterm: body.incoterm,
+        singleSource: body.singleSource === true,
+        singleSourceJustification: body.singleSourceJustification,
+        tenderNotes: null,
+      });
+
+      const invitations = [];
+      for (const vendorId of vendorIds) {
+        invitations.push(await this.insertInvitation(run, rfq.id, vendorId));
+      }
+
+      return {
+        rfq: {
+          id: rfq.id,
+          rfq_number: rfq.rfq_number,
+          pr_id: prId,
+          pr_number: p.pr_number,
+          title: rfq.title,
+          state: 'Open',
+          sourcing_mode: 'invited',
+          currency: rfq.currency,
+          deadline_at: rfq.deadline_at,
+          issued_at: rfq.issued_at,
+        },
+        invitations: invitations.map((i: any) => ({
+          invitation_id: i.invitation_id,
+          vendor_id: i.vendor_id,
+          vendor_code: i.vendor_code,
+          vendor_name: i.vendor_name,
+          invited_at: i.invited_at,
+          on_approved_roster: i.on_approved_roster,
+          // DELIVERED ONCE. Only sha256(token) is stored.
+          token: i.token,
+          accept_path: `/rfq/invite/accept/${i.token}`,
+        })),
+        // The prototype's pushEvent() line, rebuilt from real data.
+        event: {
+          action: 'RFQ issued',
+          detail: `${rfq.rfq_number} sent to ${vendorIds.length} vendor` +
+            `${vendorIds.length === 1 ? '' : 's'}`,
+        },
+        // rfqIssue() always ends with 3 vendors. When the eligible pool was
+        // short we did NOT reach 3, and the UI must say so and offer the
+        // top-up rather than implying a compliant 3-quote competition.
+        roster_shortfall: shortfall,
+        ...(shortfall > 0
+          ? {
+              warning:
+                `Only ${vendorIds.length} vendor(s) were eligible to invite ` +
+                `(${shortfall} short of the ${DEFAULT_VENDOR_COUNT} ` +
+                `the prototype issues to). Use POST /rfq/${rfq.id}/invite to top the roster up.`,
+            }
+          : {}),
+        // Named vendors that are held, or un-categorised and invited by hand.
+        // The UI shows these so an admin knows exactly who was dropped and why,
+        // instead of discovering a silently short roster later.
+        ...(warnings.length ? { warnings } : {}),
+      };
+    });
+  }
+
+  // ── POST /pr/:id/tender ─────────────────────────────────────────────────
+  /**
+   * Post an OPEN TENDER for a PR — the alternative to `issue()`.
+   *
+   * An open tender is an RFQ with `sourcing_mode = 'open_tender'` (migration
+   * 076). It is created with NO invitations: instead of procurement naming the
+   * vendors, every eligible registered vendor can see it and bid until the
+   * deadline. Bids land in `proc.quotations` against this RFQ, so the
+   * comparative statement, award and the approval chain after it are the same
+   * as for an invited RFQ.
+   *
+   * The same pre-flight gates as `issue()` apply (`preflightNewRfq`): the PR
+   * must be at procurement's stage, it may carry only one live RFQ or tender,
+   * every line category must have at least one eligible vendor, and at least
+   * one line must be quotable. A tender nobody is eligible to bid on is the
+   * same dead end as an RFQ nobody can be invited to.
+   *
+   * Unlike an invited RFQ, the deadline is REQUIRED and is not display-only:
+   * it is what closes bidding. (Enforcement lives on the bid path, which is
+   * built in the next step.)
+   */
+  async postTender(
+    prId: string,
+    userId: string,
+    role: string,
+    costCenterIds: string[],
+    body: PostTenderInput,
+  ) {
+    if (!roleAllowed(role, 'procurement')) {
+      throw new ForbiddenException('Only Procurement can post a tender.');
+    }
+    if (!body?.deadlineAt) {
+      throw new BadRequestException('deadlineAt is required for a tender — bidding closes at this time.');
+    }
+    const notes = (body.notes ?? '').trim();
+    if (notes.length > 4000) {
+      throw new BadRequestException('notes must be at most 4000 characters');
+    }
+
+    return this.db.withTransaction({ userId, role, costCenterIds }, async (run) => {
+      const p = await this.preflightNewRfq(run, prId);
+
+      const rfq = await this.insertRfqWithLines(run, p, userId, {
+        mode: 'open_tender',
+        deadline: this.resolveDeadline(body.deadlineAt),
+        title: body.title,
+        currency: body.currency,
+        incoterm: body.incoterm,
+        singleSource: false,
+        singleSourceJustification: undefined,
+        tenderNotes: notes || null,
+      });
+
+      const eligible = await run<{ n: number }>(
+        `SELECT count(*)::int AS n
+           FROM core.vendors v
+           CROSS JOIN LATERAL core.fn_vendor_composite(v.scorecard) AS comp
+          WHERE ${INVITABLE_VENDOR_PREDICATE}`,
+        [pgArray(EXCLUDED_VENDOR_STATES)],
+      );
+
+      return {
+        rfq: {
+          id: rfq.id,
+          rfq_number: rfq.rfq_number,
+          pr_id: prId,
+          pr_number: p.pr_number,
+          title: rfq.title,
+          state: 'Open',
+          sourcing_mode: 'open_tender',
+          tender_notes: notes || null,
+          currency: rfq.currency,
+          deadline_at: rfq.deadline_at,
+          issued_at: rfq.issued_at,
+        },
+        // How many registered vendors could bid today. Informational: the set
+        // is re-checked when each vendor actually bids.
+        eligible_vendor_count: Number(eligible.rows[0]?.n ?? 0),
+        event: {
+          action: 'Tender posted',
+          detail: `${rfq.rfq_number} open for bids until ${rfq.deadline_at}`,
+        },
+      };
+    });
+  }
+
+  /**
+   * The gates every NEW RFQ or tender must pass, in the order `issue()` has
+   * always run them. Returns the PR row. Shared so the two routes into
+   * sourcing cannot drift apart on what a sourceable PR is.
+   */
+  private async preflightNewRfq(
+    run: <U = any>(sql: string, params?: any[]) => Promise<{ rows: U[]; rowCount: number }>,
+    prId: string,
+  ) {
       const pr = await run<any>(
         `SELECT pr.id, pr.pr_number, pr.title, pr.status, pr.currency,
                 pr.estimated_amount
@@ -761,18 +946,32 @@ export class RfqService {
         }
       }
 
-      const { vendorIds, shortfall, warnings } = await this.resolveVendors(run, prId, body.vendorIds);
+      return p;
+  }
 
-      // rfq_check: deadline_at >= created_at + 24h. Display-only per Q2.
-      const deadline = this.resolveDeadline(body.deadlineAt);
-      const title = (body.title || p.title || p.pr_number).trim();
-      const currency = (body.currency || p.currency || 'PKR').trim();
-
-      if (body.singleSource && !(body.singleSourceJustification || '').trim()) {
-        throw new BadRequestException(
-          'a single-source justification is required when single_source is set',
-        );
-      }
+  /**
+   * Insert the `proc.rfq` row and snapshot the PR's quotable lines onto it.
+   * Shared by `issue()` (invited) and `postTender()` (open tender). Call only
+   * after `preflightNewRfq()` has passed.
+   */
+  private async insertRfqWithLines(
+    run: <U = any>(sql: string, params?: any[]) => Promise<{ rows: U[]; rowCount: number }>,
+    p: any,
+    userId: string,
+    o: {
+      mode: 'invited' | 'open_tender';
+      deadline: string;
+      title?: string;
+      currency?: string;
+      incoterm?: string;
+      singleSource: boolean;
+      singleSourceJustification?: string;
+      tenderNotes: string | null;
+    },
+  ) {
+      const prId = p.id;
+      const title = (o.title || p.title || p.pr_number).trim();
+      const currency = (o.currency || p.currency || 'PKR').trim();
 
       const num = await run<{ rfq_number: string }>(
         `SELECT proc.fn_next_rfq_number() AS rfq_number`,
@@ -783,13 +982,16 @@ export class RfqService {
         `INSERT INTO proc.rfq
            (rfq_number, pr_id, created_by_user_id, deadline_at, state,
             single_source, single_source_justification, currency, incoterm,
-            created_at, issued_at, title, initial_deadline_at)
+            created_at, issued_at, title, initial_deadline_at,
+            sourcing_mode, tender_notes)
          VALUES ($1, $2::uuid, $3::uuid, $4, 'Open',
-                 $5, $6, $7, $8, now(), now(), $9, $4)
+                 $5, $6, $7, $8, now(), now(), $9, $4,
+                 $10, $11)
          RETURNING id, rfq_number, issued_at, deadline_at, currency, title`,
         [
-          rfqNumber, prId, userId, deadline, body.singleSource === true,
-          body.singleSourceJustification || null, currency, body.incoterm || null, title,
+          rfqNumber, prId, userId, o.deadline, o.singleSource,
+          o.singleSourceJustification || null, currency, o.incoterm || null, title,
+          o.mode, o.tenderNotes,
         ],
       );
       const rfq = ins.rows[0];
@@ -815,58 +1017,7 @@ export class RfqService {
         );
       }
 
-      const invitations = [];
-      for (const vendorId of vendorIds) {
-        invitations.push(await this.insertInvitation(run, rfq.id, vendorId));
-      }
-
-      return {
-        rfq: {
-          id: rfq.id,
-          rfq_number: rfq.rfq_number,
-          pr_id: prId,
-          pr_number: p.pr_number,
-          title: rfq.title,
-          state: 'Open',
-          currency: rfq.currency,
-          deadline_at: rfq.deadline_at,
-          issued_at: rfq.issued_at,
-        },
-        invitations: invitations.map((i: any) => ({
-          invitation_id: i.invitation_id,
-          vendor_id: i.vendor_id,
-          vendor_code: i.vendor_code,
-          vendor_name: i.vendor_name,
-          invited_at: i.invited_at,
-          on_approved_roster: i.on_approved_roster,
-          // DELIVERED ONCE. Only sha256(token) is stored.
-          token: i.token,
-          accept_path: `/rfq/invite/accept/${i.token}`,
-        })),
-        // The prototype's pushEvent() line, rebuilt from real data.
-        event: {
-          action: 'RFQ issued',
-          detail: `${rfq.rfq_number} sent to ${vendorIds.length} vendor` +
-            `${vendorIds.length === 1 ? '' : 's'}`,
-        },
-        // rfqIssue() always ends with 3 vendors. When the eligible pool was
-        // short we did NOT reach 3, and the UI must say so and offer the
-        // top-up rather than implying a compliant 3-quote competition.
-        roster_shortfall: shortfall,
-        ...(shortfall > 0
-          ? {
-              warning:
-                `Only ${vendorIds.length} vendor(s) were eligible to invite ` +
-                `(${shortfall} short of the ${DEFAULT_VENDOR_COUNT} ` +
-                `the prototype issues to). Use POST /rfq/${rfq.id}/invite to top the roster up.`,
-            }
-          : {}),
-        // Named vendors that are held, or un-categorised and invited by hand.
-        // The UI shows these so an admin knows exactly who was dropped and why,
-        // instead of discovering a silently short roster later.
-        ...(warnings.length ? { warnings } : {}),
-      };
-    });
+      return rfq;
   }
 
   // ── POST /rfq/:id/invite ────────────────────────────────────────────────

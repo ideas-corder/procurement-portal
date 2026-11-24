@@ -26,6 +26,17 @@ class IssueRfqDto {
   @IsOptional() @IsString() @MaxLength(2000) singleSourceJustification?: string;
 }
 
+/** Post an open tender. No roster — any eligible vendor may bid. */
+class PostTenderDto {
+  /** Required: bidding closes at this time. At least 24h from now. */
+  @IsISO8601() deadlineAt!: string;
+  @IsOptional() @IsString() @MaxLength(300) title?: string;
+  /** Requirement / terms text shown to bidders. */
+  @IsOptional() @IsString() @MaxLength(4000) notes?: string;
+  @IsOptional() @IsString() @MaxLength(8) currency?: string;
+  @IsOptional() @IsString() @MaxLength(32) incoterm?: string;
+}
+
 class InviteVendorDto {
   @Matches(UUID_RE, { message: 'vendorId must be a UUID' }) vendorId!: string;
 }
@@ -74,6 +85,17 @@ export class RfqIssueController {
   async issue(@Param('id') id: string, @Body() body: IssueRfqDto, @Req() req: any) {
     const u = req.user;
     return this.svc.issue(id, u.id, u.role, u.costCenterIds, body);
+  }
+
+  /**
+   * `POST /pr/:id/tender` — post an OPEN TENDER instead of an invited RFQ.
+   * Same PR-stage and one-live-RFQ rules as `POST :id/rfq`; see
+   * RfqService.postTender.
+   */
+  @Post(':id/tender')
+  async postTender(@Param('id') id: string, @Body() body: PostTenderDto, @Req() req: any) {
+    const u = req.user;
+    return this.svc.postTender(id, u.id, u.role, u.costCenterIds, body);
   }
 
   /**
