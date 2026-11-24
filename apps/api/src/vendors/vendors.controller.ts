@@ -1,7 +1,8 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Query, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, ParseUUIDPipe, Patch, Post, Query, Req, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import { VendorsService } from './vendors.service';
 import { VendorGovernanceService } from './vendor-governance.service';
+import { VendorApplicationsService } from './vendor-applications.service';
 import type { AuthenticatedUser } from '../auth/auth.service';
 
 @UseGuards(JwtAuthGuard)
@@ -10,6 +11,7 @@ export class VendorsController {
   constructor(
     private readonly svc: VendorsService,
     private readonly gov: VendorGovernanceService,
+    private readonly apps: VendorApplicationsService,
   ) {}
 
   /**
@@ -45,6 +47,32 @@ export class VendorsController {
   async applications(@Req() req: any) {
     const u = req.user as AuthenticatedUser;
     return this.svc.applications(u.role);
+  }
+
+  /**
+   * POST /vendors/applications/:id/approve — create the vendor, its category
+   * and its supplier login from an onboarding application.
+   * Body (all optional): contactEmail, categories[], note.
+   */
+  @Post('applications/:id/approve')
+  async approveApplication(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() body: { contactEmail?: string; categories?: string[]; note?: string },
+    @Req() req: any,
+  ) {
+    const u = req.user as AuthenticatedUser;
+    return this.apps.approve(id, { id: u.id, role: u.role, costCenterIds: u.costCenterIds ?? [] }, body ?? {});
+  }
+
+  /** POST /vendors/applications/:id/reject — body: { reason } (required). */
+  @Post('applications/:id/reject')
+  async rejectApplication(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() body: { reason?: string },
+    @Req() req: any,
+  ) {
+    const u = req.user as AuthenticatedUser;
+    return this.apps.reject(id, { id: u.id, role: u.role, costCenterIds: u.costCenterIds ?? [] }, body?.reason);
   }
 
   /**
