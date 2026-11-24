@@ -24,6 +24,7 @@
     "tests/**/*.ts",
     "components/governance/GovernanceCards.tsx",
     "components/supplier/SupplierCards.tsx",
+    "components/supplier/TenderCards.tsx",
     "components/sourcing/quoteMath.ts",
     "components/sourcing/quoteColumns.ts",
     "components/sourcing/quoteRows.ts",

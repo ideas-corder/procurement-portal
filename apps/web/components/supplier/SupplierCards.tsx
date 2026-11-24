@@ -67,6 +67,8 @@ export type InboxInvitation = {
   canSubmit: boolean;
   canDecline: boolean;
   rosterRows: RosterRow[];
+  /** 'open_tender' for a tender the vendor joined; those are listed under My Bids. */
+  sourcingMode?: 'invited' | 'open_tender';
 };
 
 export type InboxData = {
@@ -93,6 +95,14 @@ export type QuoteFormData = {
   totals: QuoteTotals;
   currentQuote: { version: number; totalAmount: number | null } | null;
   canSubmit: boolean;
+  invitation?: {
+    rfqNumber: string;
+    rfqState: string;
+    deadlineAt: string | null;
+    /** 'open_tender' when this form is a bid on an open tender. */
+    sourcingMode?: 'invited' | 'open_tender';
+    tenderNotes?: string | null;
+  };
 };
 
 const dash = <span className="text-mute">&mdash;</span>;
@@ -339,11 +349,17 @@ export function SupplierQuoteLines({
  * offer a label the API's converter would reject.
  */
 export function SupplierCommercialTerms({
-  values, onChange, disabled = false,
+  values, onChange, disabled = false, hideSubmit = false,
 }: {
   values: { totalAmount: number | null; leadTime: string; warranty: string; paymentTerms: string; remarks: string };
   onChange?: (key: string, value: string) => void;
   disabled?: boolean;
+  /**
+   * Leave out the card's own "Submit quote" button. It has no handler (the page
+   * renders the working submit button), so a host that labels its own button
+   * differently, like the open-tender bid form, hides this one.
+   */
+  hideSubmit?: boolean;
 }) {
   const set = onChange || (() => { /* static render */ });
   return (
@@ -392,13 +408,17 @@ export function SupplierCommercialTerms({
             onChange={(e) => set('remarks', e.target.value)}
           />
         </label>
-        <div className="btn-row">
-          <button className="btn success" disabled={disabled}>
-            <svg className="icon sm"><use href="#i-check" /></svg>
-            Submit quote
-          </button>
-          <span className="text-sm text-mute" style={{ alignSelf: 'center' }}>{SUPPLIER_SUBMIT_HINT}</span>
-        </div>
+        {hideSubmit ? (
+          <div className="text-sm text-mute">{SUPPLIER_SUBMIT_HINT}</div>
+        ) : (
+          <div className="btn-row">
+            <button className="btn success" disabled={disabled}>
+              <svg className="icon sm"><use href="#i-check" /></svg>
+              Submit quote
+            </button>
+            <span className="text-sm text-mute" style={{ alignSelf: 'center' }}>{SUPPLIER_SUBMIT_HINT}</span>
+          </div>
+        )}
       </div>
     </div>
   );

@@ -18,6 +18,7 @@ import Shell from '../../components/Shell';
 import {
   SupplierQuoteLines, SupplierCommercialTerms, type QuoteFormData,
 } from '../../components/supplier/SupplierCards';
+import { closesIn, fmtDeadline } from '../../components/supplier/TenderCards';
 import {
   quoteLineTotals, SUPPLIER_TERM_DEFAULTS,
   type SupplierQuoteLine,
@@ -94,6 +95,8 @@ export default function SupplierQuote() {
   if (!ready) return null;
   if (!session) return null;
 
+  const isTender = form?.invitation?.sourcingMode === 'open_tender';
+
   const submit = async () => {
     if (!form || !invitationId) return;
     setBusy(true); setErr(null); setMsg(null);
@@ -114,6 +117,9 @@ export default function SupplierQuote() {
           ? `Revised to V${r.data.version}. ${r.data.transition}.`
           : `Submitted as V${r.data.version}.`,
       );
+      if (isTender) {
+        setMsg(m => `${m} You can change your bid until the deadline.`);
+      }
       const fresh = await api.get<QuoteFormData>(`/supplier/rfq/${invitationId}`);
       setForm(fresh.data);
     } catch (e: any) {
@@ -124,18 +130,48 @@ export default function SupplierQuote() {
   };
 
   return (
-    <Shell title="Submit Quote" screenId="supplier-quote" subtitle={form?.subtitle}>
-      {err && <div className="alert error">{err}</div>}
+    <Shell title={isTender ? 'Submit Bid' : 'Submit Quote'} screenId="supplier-quote" subtitle={form?.subtitle}>
+      {isTender && (
+        <p className="text-sm" style={{ marginTop: 0 }}>
+          <a href="/supplier?tab=bids" onClick={e => { e.preventDefault(); router.push('/supplier?tab=bids'); }}>
+            &larr; My Bids
+          </a>
+        </p>
+      )}
+      {err && <div className="alert danger">{err}</div>}
       {msg && <div className="alert success">{msg}</div>}
       {!form && !err && <div className="card"><div className="card-b empty-state">Loading&hellip;</div></div>}
 
       {form && (
         <>
           {/* The prototype's info alert (:9044), with its false "sealed until"
-              clause replaced by the honest visibility rule. */}
-          <div className="alert info">{form.alert}</div>
+              clause replaced by the honest visibility rule. An open tender says
+              what is true for it instead: vendors never see each other. */}
+          {isTender ? (
+            <div className="alert info" data-tender-alert="">
+              {/* One child: .alert is a flex row, and loose text nodes would
+                  each become their own column. */}
+              <div>
+              <b>Open tender {form.invitation?.rfqNumber}.</b>{' '}
+              {form.canSubmit
+                ? <>Bidding {form.invitation?.deadlineAt ? closesIn(form.invitation.deadlineAt) : 'is open'}
+                    {form.invitation?.deadlineAt ? ` (${fmtDeadline(form.invitation.deadlineAt)})` : ''}.
+                    {' '}You can submit and change your bid until then. </>
+                : <>Bidding closed{form.invitation?.deadlineAt ? ` on ${fmtDeadline(form.invitation.deadlineAt)}` : ''}.
+                    {' '}Your last bid stands and can no longer be changed. </>}
+              Bids are sealed: other vendors never see your bid or your name.
+              {form.invitation?.tenderNotes && (
+                <div style={{ marginTop: 6, whiteSpace: 'pre-wrap' }}>
+                  <b>Requirement:</b> {form.invitation.tenderNotes}
+                </div>
+              )}
+              </div>
+            </div>
+          ) : (
+            <div className="alert info">{form.alert}</div>
+          )}
 
-          {form.currentQuote && (
+          {form.currentQuote && form.canSubmit && (
             <p className="text-sm text-mute">
               You have a live quote at V{form.currentQuote.version}. Submitting again appends a
               new version and supersedes it &mdash; the earlier price is never rewritten.
@@ -152,13 +188,14 @@ export default function SupplierQuote() {
           <SupplierCommercialTerms
             values={terms}
             disabled={!form.canSubmit || busy}
+            hideSubmit={isTender}
             onChange={(k, v) => setTerms(t => ({ ...t, [k]: k === 'totalAmount' ? (v === '' ? null : Number(v)) : v }))}
           />
 
           {form.canSubmit && (
             <button className="btn success" onClick={submit} disabled={busy}>
               <svg className="icon sm"><use href="#i-check" /></svg>
-              {busy ? 'Submitting…' : 'Submit quote'}
+              {busy ? 'Submitting…' : isTender ? (form.currentQuote ? 'Update bid' : 'Submit bid') : 'Submit quote'}
             </button>
           )}
         </>
