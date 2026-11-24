@@ -108,6 +108,12 @@ export type Sourcing = {
       reissueCount: number;
       lastReissuedAt: string | null;
       state: string;
+      /** 'invited' (procurement named the vendors) or 'open_tender'. */
+      sourcingMode?: 'invited' | 'open_tender';
+      /** Requirement / terms text shown to bidders. Tenders only. */
+      tenderNotes?: string | null;
+      /** Open tender past its deadline: no more bids can come in. */
+      biddingClosed?: boolean;
     } | null;
     quotes: SourcingQuote[];
     selectedQuoteIndex: number;
@@ -197,7 +203,28 @@ export function ProcurementCard({ s }: { s: Sourcing }) {
         </div>
       </div>
       <div className="card-b">
-        {rfq ? (
+        {rfq && rfq.sourcingMode === 'open_tender' ? (
+          // An open tender has no invite list, so the RFQ line's "N vendor(s)"
+          // would read as "nobody was asked". Say what it is instead.
+          <div data-tender-header="">
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginTop: 6 }}>
+              <b>Tender:</b>
+              <span className="mono">{rfq.id}</span>
+              <span className="pill info">Open tender</span>
+              <IssuedPill at={rfq.issuedAt} label="posted" />
+              &middot; bidding {rfq.biddingClosed ? 'closed' : 'closes'} <b>{dash(rfq.deadline)}</b>
+              {rfq.biddingClosed
+                ? <span className="pill" data-tender-state="closed">Closed for bids</span>
+                : <span className="pill success" data-tender-state="open">Accepting bids</span>}
+              &middot; <b>{rfq.vendorIds.length}</b> bidder(s) so far
+            </div>
+            {rfq.tenderNotes && (
+              <div className="text-sm text-mute" style={{ marginTop: 6, whiteSpace: 'pre-wrap' }}>
+                {rfq.tenderNotes}
+              </div>
+            )}
+          </div>
+        ) : rfq ? (
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginTop: 6 }}>
             <b>RFQ:</b>
             <span className="mono">{rfq.id}</span>
@@ -223,7 +250,8 @@ export function ProcurementCard({ s }: { s: Sourcing }) {
         ) : (
           // The prototype's own empty state (line 6166).
           <div className="text-sm text-mute">
-            Click <b>Issue RFQ</b> to start the procurement flow.
+            Click <b>Issue RFQ</b> to invite chosen vendors, or <b>Post Tender</b> to let
+            every eligible vendor bid, to start the procurement flow.
           </div>
         )}
 

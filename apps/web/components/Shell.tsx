@@ -3,6 +3,7 @@ import { useRouter } from 'next/router';
 import { ReactNode, useEffect, useState } from 'react';
 import { useSession } from '../lib/session';
 import CardCollapse from './CardCollapse';
+import NotificationBell from './NotificationBell';
 import {
   ROLE_LABELS,
   navFor,
@@ -242,6 +243,7 @@ export default function Shell({ children, title, subtitle, screenId, preTitle, a
                 <option value={role}>{ROLE_LABELS[role] || role}</option>
               </select>
             </div>
+            <NotificationBell />
             <span className="text-sm text-mute">{session.user.displayName}</span>
             <button className="btn sm" onClick={logout}>Sign out</button>
           </div>

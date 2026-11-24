@@ -21,6 +21,7 @@ import Shell from '../../components/Shell';
 import { StagePill, DeptChip, pkr, pkrOrDash, fmtDate, fmtDateTime, stageLabel, stageOwner, visibleItems, seesHeldLines, revertBlockedByRfq } from '../../lib/ui';
 import { ProcurementCard, RosterCard, type Sourcing } from '../../components/sourcing/SourcingCards';
 import ReceiveQuotationModal from '../../components/sourcing/ReceiveQuotationModal';
+import PostTenderModal from '../../components/sourcing/PostTenderModal';
 import { quotationRows } from '../../components/sourcing/quoteRows';
 import { roleAllowed, canSeeScreen } from '@procurement/roles';
 // The per-line Capex/Opex control. It imports CLASSIFICATIONS itself from
@@ -466,6 +467,8 @@ export default function PrDetail() {
   const [cands, setCands] = useState<RfqCandidates | null>(null);
   const [picked, setPicked] = useState<string[]>([]);
   const [rfqDeadline, setRfqDeadline] = useState('');
+  // Post Tender (open tender, migration 076). Same placement rule as above.
+  const [tenderOpen, setTenderOpen] = useState(false);
 
   // Receive Quotation (prototype lightProcReceiveQuote). Declared HERE for the
   // same reason as the block above: above the `if (!pr) return null;` early
@@ -910,6 +913,10 @@ export default function PrDetail() {
   // not recomputed here: RfqService.issue() refuses a second RFQ on a PR, so a
   // locally-derived answer could offer a button whose only outcome is a 400.
   const hasRfq = Boolean(src?.procurement?.rfq);
+  // An open tender has no roster to top up, and it may only go to CS once its
+  // deadline has passed (the API refuses earlier; this just says so first).
+  const isTender = src?.procurement?.rfq?.sourcingMode === 'open_tender';
+  const tenderStillOpen = isTender && !src?.procurement?.rfq?.biddingClosed;
   // Live quotations on file — the precondition for handing the round to CS. Read
   // from the server's sourcing payload, and counted by STATE, because the quotes
   // array carries every version a vendor sent: V1 stays on the record as
@@ -1666,18 +1673,20 @@ export default function PrDetail() {
                           <button
                             className="btn success sm"
                             onClick={forwardToCs}
-                            disabled={csBusy || liveQuoteCount === 0}
-                            title={liveQuoteCount === 0
+                            disabled={csBusy || liveQuoteCount === 0 || tenderStillOpen}
+                            title={tenderStillOpen
+                              ? 'This tender is still open for bids. It can go to CS once the deadline has passed.'
+                              : liveQuoteCount === 0
                               ? 'At least one quotation must be received before this can go to CS — the committee compares quotations, so there is nothing to compare yet.'
                               : 'Hand this to CS for a comparative statement. Quotations close on the moment this is pressed.'}
-                            style={liveQuoteCount === 0 ? { opacity: 0.55, cursor: 'not-allowed' } : undefined}
+                            style={liveQuoteCount === 0 || tenderStillOpen ? { opacity: 0.55, cursor: 'not-allowed' } : undefined}
                           >
                             {csBusy ? 'Forwarding…' : 'Ready for CS'}
                           </button>
                         )}
                       </>
                     )}
-                    {hasRfq && canReissue && (
+                    {hasRfq && canReissue && !isTender && (
                       <button className="btn ghost sm" onClick={openRfq}>
                         <span style={{ display: 'inline-block', marginRight: 4 }}>&#8613;</span>
                         Re-issue RFQ
@@ -1687,6 +1696,17 @@ export default function PrDetail() {
                       <button className="btn ghost sm" onClick={openRfq}>
                         <span style={{ display: 'inline-block', marginRight: 4 }}>&#8613;</span>
                         Issue RFQ
+                      </button>
+                    )}
+                    {!hasRfq && (
+                      <button
+                        className="btn ghost sm"
+                        onClick={() => { setActErr(null); setActMsg(null); setTenderOpen(true); }}
+                        title="Open the requirement to every eligible vendor with a bidding deadline, instead of inviting chosen vendors."
+                        data-post-tender=""
+                      >
+                        <span style={{ display: 'inline-block', marginRight: 4 }}>&#9873;</span>
+                        Post Tender
                       </button>
                     )}
                   </>
@@ -2354,6 +2374,16 @@ export default function PrDetail() {
             </div>
           </div>
         </div>
+      )}
+
+      {tenderOpen && pr && (
+        <PostTenderModal
+          prId={pr.id}
+          prNumber={pr.pr_number}
+          prTitle={pr.title}
+          onClose={() => setTenderOpen(false)}
+          onPosted={(m) => { setTenderOpen(false); setActMsg(m); load(); }}
+        />
       )}
 
       {rfqOpen && (

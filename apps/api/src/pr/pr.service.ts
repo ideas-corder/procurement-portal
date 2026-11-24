@@ -2662,8 +2662,11 @@ export class PrService {
       const comp = await run<{
         rfq_id: string; rfq_number: string; rfq_state: string;
         invited: number; live_quotes: number; waiting: number;
+        sourcing_mode: string; deadline_at: string; bidding_open: boolean;
       }>(
         `SELECT r.id AS rfq_id, r.rfq_number, r.state AS rfq_state,
+                r.sourcing_mode, r.deadline_at,
+                (r.state = 'Open' AND r.deadline_at > now()) AS bidding_open,
                 (SELECT count(*)::int FROM proc.rfq_invitations i
                   WHERE i.rfq_id = r.id) AS invited,
                 (SELECT count(DISTINCT q.vendor_id)::int FROM proc.quotations q
@@ -2688,6 +2691,16 @@ export class PrService {
           'one quotation before handing it to CS.',
         );
       }
+      // OPEN TENDER: every eligible vendor was promised bidding until the
+      // deadline, and forwarding closes the RFQ. So a tender goes to CS only
+      // once its deadline has passed, never early.
+      if (rfq.sourcing_mode === 'open_tender' && rfq.bidding_open === true) {
+        throw new BadRequestException(
+          `${pr.pr_number} cannot go to CS yet: tender ${rfq.rfq_number} is still open for bids ` +
+          `until ${rfq.deadline_at}. It can be forwarded once the deadline has passed.`,
+        );
+      }
+
       if (Number(rfq.live_quotes || 0) < 1) {
         const invited = Number(rfq.invited || 0);
         throw new BadRequestException(

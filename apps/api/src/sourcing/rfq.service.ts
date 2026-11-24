@@ -669,6 +669,9 @@ export class RfqService {
         initial_deadline_at: rfq.initial_deadline_at ?? null,
         single_source: rfq.single_source,
         single_source_justification: rfq.single_source_justification,
+        // 'invited' | 'open_tender' (migration 076).
+        sourcing_mode: (rfq.sourcing_mode ?? 'invited') as string,
+        tender_notes: (rfq.tender_notes ?? null) as string | null,
         status: view.label,
         pill: view.pill,
       },
@@ -1590,6 +1593,14 @@ export class RfqService {
           state: detail.rfq.state,
           notes: null,
           notesByVendor: null,
+          // Open tender (migration 076): no roster, vendors join themselves.
+          sourcingMode: detail.rfq.sourcing_mode ?? 'invited',
+          tenderNotes: detail.rfq.tender_notes ?? null,
+          // True once bidding has stopped: the deadline passed, or the timer
+          // already closed it. Only meaningful for an open tender.
+          biddingClosed: detail.rfq.sourcing_mode === 'open_tender'
+            && (detail.rfq.state !== 'Open'
+              || (detail.rfq.deadline_at ? new Date(detail.rfq.deadline_at).getTime() <= Date.now() : false)),
         },
         // The prototype's flat quotes[] — one entry per vendor, holding the
         // LIVE version only. The full chain is in `roster[].versions`.
