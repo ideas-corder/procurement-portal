@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { DbService } from '../db/db.service';
 import { QuotationService, type QuotationInput } from '../sourcing/quotation.service';
+import { RfqService, INVITABLE_VENDOR_PREDICATE, EXCLUDED_VENDOR_STATES } from '../sourcing/rfq.service';
 import type { AuthenticatedUser } from '../auth/auth.service';
 import {
   inboxKpis,
@@ -51,6 +52,7 @@ export class SupplierService {
   constructor(
     private readonly db: DbService,
     private readonly quotations: QuotationService,
+    private readonly rfqs: RfqService,
   ) {}
 
   // ── GET /supplier/inbox ──────────────────────────────────────────────────
@@ -94,6 +96,7 @@ export class SupplierService {
               rf.id           AS rfq_id,
               rf.rfq_number, rf.title, rf.state AS rfq_state,
               rf.issued_at, rf.deadline_at, rf.currency,
+              rf.sourcing_mode, (rf.deadline_at <= now()) AS past_deadline,
               pr.estimated_amount
          FROM proc.rfq_invitations i
          JOIN proc.rfq rf               ON rf.id = i.rfq_id
@@ -166,6 +169,12 @@ export class SupplierService {
 
     const invitations: SupplierInvitation[] = inv.rows.map((r: any) => {
       const mine = quoteBy.get(r.rfq_id);
+      // SEALED: on an open tender a bidder sees only itself on the roster,
+      // never who else is bidding.
+      const fullRoster = rosterBy.get(r.rfq_id) ?? [];
+      const visibleRoster = r.sourcing_mode === 'open_tender'
+        ? fullRoster.filter((x: any) => x.vendor_id === vendorId)
+        : fullRoster;
       return {
         invitationId: r.invitation_id,
         rfqId: r.rfq_id,
@@ -180,7 +189,7 @@ export class SupplierService {
         myQuote: mine
           ? { version: Number(mine.version), state: mine.state }
           : null,
-        roster: (rosterBy.get(r.rfq_id) ?? []).map((x: any) => ({
+        roster: visibleRoster.map((x: any) => ({
           vendorId: x.vendor_id,
           legalName: x.legal_name,
           submitted: x.submitted === true,
@@ -205,14 +214,16 @@ export class SupplierService {
         // Every invited vendor, declined ones included — the roster card lists
         // the whole field, so the count must match the rows it labels.
         const others = it.roster.filter((v) => v.vendorId !== vendorId).map((v) => v.legalName);
+        const tenderClosed = row.sourcing_mode === 'open_tender' && row.past_deadline === true;
         return {
           ...it,
+          sourcingMode: row.sourcing_mode ?? 'invited',
           lineCount: countBy.get(it.rfqId) ?? 0,
           paragraph: supplierInboxParagraph(countBy.get(it.rfqId) ?? 0, others),
           rosterRows: supplierRoster(it, vendorId),
           invitedLabel: invitedCountLabel(it.roster.length),
-          canSubmit: it.rfqNumber ? row.rfq_state === 'Open' && !it.declined : false,
-          canDecline: it.rfqNumber ? !it.declined : false,
+          canSubmit: it.rfqNumber ? row.rfq_state === 'Open' && !it.declined && !tenderClosed : false,
+          canDecline: it.rfqNumber ? !it.declined && !tenderClosed : false,
         };
       }),
     };
@@ -234,6 +245,7 @@ export class SupplierService {
       `SELECT i.id AS invitation_id, i.submitted, i.declined, i.declined_reason, i.invited_at,
               rf.id AS rfq_id, rf.rfq_number, rf.title, rf.state AS rfq_state,
               rf.currency, rf.issued_at, rf.deadline_at, rf.incoterm,
+              rf.sourcing_mode, rf.tender_notes, (rf.deadline_at <= now()) AS past_deadline,
               pr.title AS pr_title, pr.estimated_amount,
               d.name AS buyer_department
          FROM proc.rfq_invitations i
@@ -321,6 +333,8 @@ export class SupplierService {
         rfqId: h.rfq_id,
         rfqNumber: h.rfq_number,
         rfqState: h.rfq_state,
+        sourcingMode: h.sourcing_mode ?? 'invited',
+        tenderNotes: h.tender_notes ?? null,
         issuedAt: h.issued_at,
         deadlineAt: h.deadline_at,
         currency: h.currency,
@@ -359,7 +373,8 @@ export class SupplierService {
         defaults: SUPPLIER_TERM_DEFAULTS,
         remarksPlaceholder: SUPPLIER_REMARKS_PLACEHOLDER,
       },
-      canSubmit: h.rfq_state === 'Open' && h.declined !== true,
+      canSubmit: h.rfq_state === 'Open' && h.declined !== true
+        && !(h.sourcing_mode === 'open_tender' && h.past_deadline === true),
     };
   }
 
@@ -541,6 +556,102 @@ export class SupplierService {
         };
       },
     );
+  }
+
+  // ── GET /supplier/tenders ────────────────────────────────────────────────
+  /**
+   * The vendor's "Open Tenders" and "My Bids" lists.
+   *
+   * openTenders: open tenders still before their deadline, in a category this
+   * vendor is mapped to, not yet joined. Empty when the vendor itself is not
+   * eligible (held, blacklisted, high risk...).
+   * myBids: every tender this vendor has joined, open or closed, with its own
+   * live bid. Never anything about other bidders.
+   */
+  async tenders(user: AuthenticatedUser) {
+    const vendorId = this.requireVendor(user);
+    const ctx = { userId: user.id, role: user.role, costCenterIds: user.costCenterIds, bypassRls: true };
+
+    const [open, mine] = await Promise.all([
+      this.db.query<any>(
+        `SELECT rf.id AS rfq_id, rf.rfq_number, rf.title, rf.tender_notes, rf.currency,
+                rf.issued_at, rf.deadline_at,
+                (SELECT count(*)::int FROM proc.rfq_lines rl WHERE rl.rfq_id = rf.id) AS line_count
+           FROM proc.rfq rf
+           JOIN core.vendors v ON v.id = $2::uuid
+           CROSS JOIN LATERAL core.fn_vendor_composite(v.scorecard) AS comp
+          WHERE rf.sourcing_mode = 'open_tender'
+            AND rf.state = 'Open'
+            AND rf.deadline_at > now()
+            AND ${INVITABLE_VENDOR_PREDICATE}
+            AND EXISTS (SELECT 1
+                          FROM proc.rfq_lines rl
+                          JOIN proc.pr_lines pl          ON pl.id = rl.pr_line_id
+                          JOIN core.categories c         ON c.code = pl.category
+                          JOIN core.vendor_categories vc ON vc.category_id = c.id AND vc.is_active
+                         WHERE rl.rfq_id = rf.id AND vc.vendor_id = v.id)
+            AND NOT EXISTS (SELECT 1 FROM proc.rfq_invitations i
+                             WHERE i.rfq_id = rf.id AND i.vendor_id = v.id)
+          ORDER BY rf.deadline_at ASC`,
+        [`{${EXCLUDED_VENDOR_STATES.join(',')}}`, vendorId],
+        ctx,
+      ),
+      this.db.query<any>(
+        `SELECT i.id AS invitation_id, rf.id AS rfq_id, rf.rfq_number, rf.title,
+                rf.state AS rfq_state, rf.deadline_at, rf.currency,
+                (rf.deadline_at <= now()) AS past_deadline,
+                q.version AS my_version, q.total_amount AS my_total
+           FROM proc.rfq_invitations i
+           JOIN proc.rfq rf ON rf.id = i.rfq_id AND rf.sourcing_mode = 'open_tender'
+           LEFT JOIN LATERAL (
+             SELECT version, total_amount FROM proc.quotations
+              WHERE rfq_id = rf.id AND vendor_id = $1::uuid AND state = 'Submitted'
+              ORDER BY version DESC LIMIT 1) q ON true
+          WHERE i.vendor_id = $1::uuid
+          ORDER BY rf.deadline_at DESC`,
+        [vendorId],
+        ctx,
+      ),
+    ]);
+
+    return {
+      openTenders: open.rows.map((r: any) => ({
+        rfqId: r.rfq_id,
+        rfqNumber: r.rfq_number,
+        title: r.title,
+        notes: r.tender_notes ?? null,
+        currency: r.currency,
+        issuedAt: r.issued_at,
+        deadlineAt: r.deadline_at,
+        lineCount: Number(r.line_count ?? 0),
+      })),
+      myBids: mine.rows.map((r: any) => {
+        const closed = r.rfq_state !== 'Open' || r.past_deadline === true;
+        const hasBid = r.my_version !== null && r.my_version !== undefined;
+        return {
+          invitationId: r.invitation_id,
+          rfqId: r.rfq_id,
+          rfqNumber: r.rfq_number,
+          title: r.title,
+          deadlineAt: r.deadline_at,
+          currency: r.currency,
+          tenderState: r.rfq_state,
+          myBid: hasBid
+            ? { version: Number(r.my_version), total: r.my_total === null ? null : Number(r.my_total) }
+            : null,
+          // Won / Lost arrives with award, in a later step.
+          status: closed ? 'Tender closed' : hasBid ? 'Submitted' : 'Not submitted',
+          canBid: !closed,
+        };
+      }),
+    };
+  }
+
+  // ── POST /supplier/tenders/:rfqId/join ───────────────────────────────────
+  /** Open a tender to bid on it. Returns the invitation id the quote form uses. */
+  async joinTender(user: AuthenticatedUser, rfqId: string) {
+    const vendorId = this.requireVendor(user);
+    return this.rfqs.joinTender(user, vendorId, rfqId);
   }
 
   // ── internals ───────────────────────────────────────────────────────────

@@ -399,6 +399,23 @@ export class QuotationService {
   ) {
     const { rfqId, vendorId, userId, body, invitationId, revise } = args;
 
+    // OPEN TENDER DEADLINE. On an invited RFQ the deadline is display-only, but
+    // on an open tender it is what closes bidding. Checked here, the one place
+    // every quote write passes through (vendor portal, procurement record,
+    // supersede), so no route can add or revise a bid after it. now() is the
+    // database clock, not the API host's.
+    const mode = await run<any>(
+      `SELECT sourcing_mode, rfq_number, deadline_at, (deadline_at <= now()) AS closed
+         FROM proc.rfq WHERE id = $1::uuid`,
+      [rfqId],
+    );
+    const m = mode.rows[0];
+    if (m && m.sourcing_mode === 'open_tender' && (m.closed === true || m.closed === 't')) {
+      throw new BadRequestException(
+        `Tender ${m.rfq_number} closed for bidding at ${m.deadline_at} - bids can no longer be submitted or changed.`,
+      );
+    }
+
     // Already holding a live version -> this is a revision, not a new quote.
     // Which vendor this write is FOR comes from the caller, never from the
     // request body: submitAsVendor copies the same id onto the body, but

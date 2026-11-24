@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, ParseUUIDPipe, Post, Req, UseGuards } from '@nestjs/common';
 import { IsArray, IsInt, IsNumber, IsOptional, IsString, MaxLength, Min } from 'class-validator';
 import { Type } from 'class-transformer';
 import { JwtAuthGuard } from '../auth/jwt.guard';
@@ -67,6 +67,22 @@ export class SupplierController {
     @Req() req: any,
   ) {
     return this.svc.submitQuote(req.user as AuthenticatedUser, invitationId, body);
+  }
+
+  /** `GET /supplier/tenders` — Open Tenders + My Bids. */
+  @Get('tenders')
+  async tenders(@Req() req: any) {
+    return this.svc.tenders(req.user as AuthenticatedUser);
+  }
+
+  /**
+   * `POST /supplier/tenders/:rfqId/join` — open a tender to bid on it.
+   * Returns the invitation id; the bid itself then goes through
+   * `GET /supplier/rfq/:invitationId` and `POST /supplier/rfq/:invitationId/quote`.
+   */
+  @Post('tenders/:rfqId/join')
+  async joinTender(@Param('rfqId', new ParseUUIDPipe()) rfqId: string, @Req() req: any) {
+    return this.svc.joinTender(req.user as AuthenticatedUser, rfqId);
   }
 
   /** `POST /supplier/rfq/:invitationId/decline` */

@@ -159,6 +159,21 @@ export const INVITABLE_VENDOR_PREDICATE = `
      AND comp.blocked IS DISTINCT FROM true`;
 
 /**
+ * "This vendor deals in something this tender asks for": mapped (actively) to
+ * the category of at least one line on the tender. Quoting is already tied to
+ * category mapping (QuotationService.revokedQuotationLines), so a tender is
+ * offered only to vendors who could actually price a line on it.
+ * Aliases required: `v`; $2 is the tender's rfq id.
+ */
+export const TENDER_CATEGORY_MATCH = `
+     EXISTS (SELECT 1
+               FROM proc.rfq_lines rl
+               JOIN proc.pr_lines pl          ON pl.id = rl.pr_line_id
+               JOIN core.categories c         ON c.code = pl.category
+               JOIN core.vendor_categories vc ON vc.category_id = c.id AND vc.is_active
+              WHERE rl.rfq_id = $2::uuid AND vc.vendor_id = v.id)`;
+
+/**
  * "This PR line can actually be quoted" — as ONE SQL fragment, for every query
  * that has to decide which lines will ride the RFQ rather than report on them.
  *
@@ -831,12 +846,15 @@ export class RfqService {
         tenderNotes: notes || null,
       });
 
+      // Same rule joinTender() applies: eligible AND mapped to a category on
+      // at least one of this tender's lines.
       const eligible = await run<{ n: number }>(
         `SELECT count(*)::int AS n
            FROM core.vendors v
            CROSS JOIN LATERAL core.fn_vendor_composite(v.scorecard) AS comp
-          WHERE ${INVITABLE_VENDOR_PREDICATE}`,
-        [pgArray(EXCLUDED_VENDOR_STATES)],
+          WHERE ${INVITABLE_VENDOR_PREDICATE}
+            AND ${TENDER_CATEGORY_MATCH}`,
+        [pgArray(EXCLUDED_VENDOR_STATES), rfq.id],
       );
 
       return {
@@ -862,6 +880,66 @@ export class RfqService {
         },
       };
     });
+  }
+
+  // ── POST /supplier/tenders/:rfqId/join ──────────────────────────────────
+  /**
+   * A vendor opens an open tender to bid on it. Creates the vendor's
+   * `rfq_invitations` row (the supplier quote endpoints are keyed by
+   * invitation id), or returns the existing one, so calling twice is harmless.
+   *
+   * Refused when the tender is closed or past its deadline, or when the vendor
+   * is not eligible: same eligibility as an invited RFQ, and mapped to the
+   * category of at least one line on the tender. An unknown id, an invited
+   * RFQ, or a tender outside the vendor's categories all return 404 so a vendor
+   * cannot probe for tenders it is not meant to see.
+   */
+  async joinTender(user: { id: string; role: string; costCenterIds: string[] }, vendorId: string, rfqId: string) {
+    return this.db.withTransaction(
+      { userId: user.id, role: user.role, costCenterIds: user.costCenterIds, bypassRls: true },
+      async (run) => {
+        const t = await run<any>(
+          `SELECT rf.id, rf.rfq_number, rf.state, rf.deadline_at,
+                  (rf.deadline_at <= now()) AS past_deadline
+             FROM proc.rfq rf
+            WHERE rf.id = $1::uuid AND rf.sourcing_mode = 'open_tender'`,
+          [rfqId],
+        );
+        if (t.rows.length === 0) throw new NotFoundException('tender not found');
+        const tender = t.rows[0];
+
+        const existing = await run<any>(
+          `SELECT id FROM proc.rfq_invitations WHERE rfq_id = $1::uuid AND vendor_id = $2::uuid`,
+          [rfqId, vendorId],
+        );
+
+        const eligible = await run<{ ok: boolean }>(
+          `SELECT EXISTS (
+             SELECT 1 FROM core.vendors v
+              CROSS JOIN LATERAL core.fn_vendor_composite(v.scorecard) AS comp
+              WHERE v.id = $3::uuid
+                AND ${INVITABLE_VENDOR_PREDICATE}
+                AND ${TENDER_CATEGORY_MATCH}) AS ok`,
+          [pgArray(EXCLUDED_VENDOR_STATES), rfqId, vendorId],
+        );
+        const isEligible = eligible.rows[0]?.ok === true || (eligible.rows[0]?.ok as any) === 't';
+
+        // Already joined: hand back the invitation even if the tender has since
+        // closed, so "My Bids" can still open the read-only form.
+        if (existing.rows.length > 0) {
+          return { invitationId: existing.rows[0].id, rfqId, rfqNumber: tender.rfq_number, alreadyJoined: true };
+        }
+        if (!isEligible) throw new NotFoundException('tender not found');
+
+        const past = tender.past_deadline === true || tender.past_deadline === 't';
+        if (tender.state !== 'Open' || past) {
+          throw new BadRequestException(`Tender ${tender.rfq_number} is closed for bidding.`);
+        }
+
+        const inv = await this.insertInvitation(run, rfqId, vendorId);
+        return { invitationId: inv.invitation_id, rfqId, rfqNumber: tender.rfq_number, alreadyJoined: false };
+      },
+    );
   }
 
   /**
