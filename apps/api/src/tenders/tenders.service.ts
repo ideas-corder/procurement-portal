@@ -38,10 +38,12 @@ const TENDER_SELECT = `
          (SELECT array_agg(DISTINCT pl.category ORDER BY pl.category)
             FROM proc.rfq_lines rl JOIN proc.pr_lines pl ON pl.id = rl.pr_line_id
            WHERE rl.rfq_id = rf.id AND pl.category IS NOT NULL) AS categories,
-         (SELECT array_agg(DISTINCT c.name ORDER BY c.name)
-            FROM proc.rfq_lines rl JOIN proc.pr_lines pl ON pl.id = rl.pr_line_id
-            JOIN core.categories c ON c.code = pl.category
-           WHERE rl.rfq_id = rf.id) AS category_names,
+         -- Same order as \`categories\` (by code), so the two arrays pair up.
+         (SELECT array_agg(x.name ORDER BY x.code) FROM (
+            SELECT DISTINCT c.code, c.name
+              FROM proc.rfq_lines rl JOIN proc.pr_lines pl ON pl.id = rl.pr_line_id
+              JOIN core.categories c ON c.code = pl.category
+             WHERE rl.rfq_id = rf.id) x) AS category_names,
          COALESCE((SELECT jsonb_agg(jsonb_build_object(
                      'line_no', rl.line_no, 'description', rl.description,
                      'quantity', rl.quantity, 'uom', rl.uom, 'category', pl.category)

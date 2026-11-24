@@ -17,8 +17,13 @@ export default function Login() {
     if (typeof q === 'string' && q) { setEmail(q); setPassword(''); }
   }, [router.query.email]);
 
+  // `?next=/path` returns the user where they were going (e.g. a tender they
+  // opened publicly). Only an in-app path is honoured, never another site.
+  const nextRaw = typeof router.query.next === 'string' ? router.query.next : '';
+  const next = nextRaw.startsWith('/') && !nextRaw.startsWith('//') ? nextRaw : '/dashboard';
+
   if (session) {
-    if (typeof window !== 'undefined') router.replace('/dashboard');
+    if (typeof window !== 'undefined') router.replace(next);
     return null;
   }
 
@@ -29,7 +34,7 @@ export default function Login() {
     try {
       const pw = (password || '').trim() || 'demo';
       await login(email, pw);
-      router.push('/dashboard');
+      router.push(next);
     } catch (e: any) {
       setErr(e.message || 'login failed');
     } finally {
@@ -63,6 +68,9 @@ export default function Login() {
             </form>
           </div>
         </div>
+        <p className="text-sm" style={{ textAlign: 'center', marginTop: 14 }}>
+          <a href="/open-tenders" data-open-tenders-link="">Browse open tenders &rarr;</a>
+        </p>
         <p className="text-sm text-mute" style={{ textAlign: 'center', marginTop: 16, lineHeight: 1.55 }}>
           Demo: <code>requester@pakboxes.pk</code> / <code>demo</code> &middot; or any from the list below.<br />
           <b>Department HODs</b> (the approval role):{' '}

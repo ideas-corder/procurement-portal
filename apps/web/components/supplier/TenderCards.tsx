@@ -190,7 +190,8 @@ export function MyBidsList({
                     onClick={() => onOpen?.(b.invitationId)}
                     data-open-bid={b.invitationId}
                   >
-                    {b.canBid ? (b.myBid ? 'Edit bid' : 'Bid now') : 'View'}
+                    {/* Tender bids are final: a submitted bid is view-only. */}
+                    {b.canBid && !b.myBid ? 'Bid now' : 'View'}
                   </button>
                 </td>
               </tr>

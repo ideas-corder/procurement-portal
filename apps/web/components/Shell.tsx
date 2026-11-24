@@ -101,6 +101,12 @@ const ROUTES: Record<string, string> = {
   cs: '/approvals',
   login: '/',
   'vendor-onboard-public': '/onboarding',
+  // The separate tender screens.
+  tenders: '/tenders',
+  'tender-requests': '/tenders/requests',
+  'tender-request-new': '/tenders/request',
+  'supplier-tenders': '/supplier/tenders',
+  'open-tenders': '/open-tenders',
 };
 
 /**

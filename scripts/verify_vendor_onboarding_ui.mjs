@@ -109,8 +109,9 @@ await vp.waitForURL(/\/(dashboard|supplier)/, { timeout: 30000 });
 // leaving mid-route makes Next.js log an aborted route load.
 await vp.waitForLoadState('networkidle');
 await vp.waitForTimeout(1500);
-await vp.goto(`${WEB}/supplier?tab=tenders`, { waitUntil: 'networkidle' });
-await vp.waitForSelector('[data-supplier-tab="tenders"]', { timeout: 30000 });
+// A supplier lands on its tender dashboard (dashboard.tsx forwards vendors there).
+await vp.goto(`${WEB}/supplier/tenders`, { waitUntil: 'networkidle' });
+await vp.waitForSelector('[data-vendor-tab="browse"]', { timeout: 30000 });
 const sub = await vp.textContent('body');
 check(sub.includes(NAME), 'supplier portal acts as the new vendor');
 await vp.screenshot({ path: `${SHOTS}/a5-supplier.png` });

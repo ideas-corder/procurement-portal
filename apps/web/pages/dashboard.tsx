@@ -53,6 +53,8 @@ export default function Dashboard() {
   useEffect(() => {
     if (!ready) return;                 // session not read from storage yet
     if (!session) { router.replace('/'); return; }
+    // A supplier's home is its tender dashboard, not the staff PR overview.
+    if (session.user.role === 'vendor') { router.replace('/supplier/tenders'); return; }
     const me = session.user.id;
 
     api.get<Row[]>('/pr')

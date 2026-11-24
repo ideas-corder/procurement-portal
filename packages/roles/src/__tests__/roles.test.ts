@@ -26,8 +26,10 @@ import {
 // screen that was added to the sidebar and never registered (or registered twice,
 // which R2 covers), so it has to move when a screen is deliberately added.
 // Raising it without adding a screen would be the failure it is meant to catch.
-test('R1 the registry has all 34 registered screens', () => {
-  assert.equal(SCREENS.length, 34);
+test('R1 the registry has all 39 registered screens', () => {
+  // 34 + the five tender screens (tender-request-new, tender-requests,
+  // tenders, supplier-tenders, open-tenders).
+  assert.equal(SCREENS.length, 39);
 });
 
 test('R2 screen ids are unique', () => {
@@ -49,9 +51,9 @@ test('R4 every screen declares a known nav section', () => {
   }
 });
 
-test('R5 only the two public surfaces are full-screen', () => {
+test('R5 only the public surfaces are full-screen', () => {
   const fs = SCREENS.filter(s => s.fullScreen).map(s => s.id).sort();
-  assert.deepEqual(fs, ['login', 'vendor-onboard-public']);
+  assert.deepEqual(fs, ['login', 'open-tenders', 'vendor-onboard-public']);
 });
 
 test('R6 light-pr-detail is reachable but not in the sidebar', () => {

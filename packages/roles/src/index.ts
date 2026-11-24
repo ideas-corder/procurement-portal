@@ -115,7 +115,9 @@ export type ScreenId =
   | 'admin-matrix' | 'admin-workflow' | 'admin-dimensions' | 'admin-uom'
   | 'admin-categories'
   | 'settings' | 'acknowledge'
-  | 'vendor-onboard-public' | 'login';
+  | 'vendor-onboard-public' | 'login'
+  // The separate tender screens (feature/open-tender).
+  | 'tenders' | 'tender-requests' | 'tender-request-new' | 'supplier-tenders' | 'open-tenders';
 
 export type ScreenDef = {
   id: ScreenId;
@@ -132,7 +134,7 @@ export type ScreenDef = {
   hiddenInNav?: boolean;
 };
 
-export type NavSection = 'Overview' | 'Walkthrough' | 'Library' | 'Public surfaces';
+export type NavSection = 'Overview' | 'Tenders' | 'Walkthrough' | 'Library' | 'Public surfaces';
 
 /**
  * The prototype's sidebar, in order, with the prototype's exact `data-roles`
@@ -186,12 +188,21 @@ export const SCREENS: ScreenDef[] = [
   { id: 'settings', label: 'Settings', roles: 'all', icon: 'i-settings', section: 'Library' },
   { id: 'acknowledge', label: 'Acknowledge request', roles: 'all', icon: 'i-mail', section: 'Library' },
 
+  // ── Tenders: the open-tender flow on its own screens. Not prototype screens;
+  // they read the same workflow (a tender is a PR -> HOD -> procurement ->
+  // open-tender RFQ). ─────────────────────────────────────────────────────
+  { id: 'tender-request-new', label: 'New Tender Request', roles: 'requester', icon: 'i-plus', section: 'Tenders' },
+  { id: 'tender-requests', label: 'Tender Requests', roles: 'requester,hod', icon: 'i-doc', section: 'Tenders' },
+  { id: 'tenders', label: 'Tender Management', roles: 'procurement,cs', icon: 'i-inbox', section: 'Tenders' },
+  { id: 'supplier-tenders', label: 'Tenders', roles: 'vendor', icon: 'i-inbox', section: 'Tenders' },
+
   // ── Public surfaces (full-screen, outside the app shell) ─────────────────
   { id: 'login', label: 'Login page', roles: 'all', icon: 'i-user', section: 'Public surfaces', fullScreen: true },
   { id: 'vendor-onboard-public', label: 'Vendor onboarding', roles: 'all', icon: 'i-truck', section: 'Public surfaces', fullScreen: true },
+  { id: 'open-tenders', label: 'Public tender board', roles: 'all', icon: 'i-inbox', section: 'Public surfaces', fullScreen: true },
 ];
 
-export const NAV_SECTIONS: NavSection[] = ['Overview', 'Walkthrough', 'Library', 'Public surfaces'];
+export const NAV_SECTIONS: NavSection[] = ['Overview', 'Tenders', 'Walkthrough', 'Library', 'Public surfaces'];
 
 export function screenById(id: string): ScreenDef | undefined {
   return SCREENS.find(s => s.id === id);

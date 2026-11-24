@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { api } from '../../lib/api';
+import { api, uploadFile } from '../../lib/api';
 
 /**
  * "Post Tender" — the open-tender alternative to "Issue RFQ".
@@ -37,6 +37,11 @@ export default function PostTenderModal({
   const [deadline, setDeadline] = useState(localInputValue(new Date(now + DEFAULT_DAYS * 86400e3)));
   const [title, setTitle] = useState(prTitle || '');
   const [notes, setNotes] = useState('');
+  // Optional published terms and documents (migration 079).
+  const [budgetMin, setBudgetMin] = useState('');
+  const [budgetMax, setBudgetMax] = useState('');
+  const [deposit, setDeposit] = useState('');
+  const [files, setFiles] = useState<File[]>([]);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -44,9 +49,16 @@ export default function PostTenderModal({
   const deadlineMs = deadline ? new Date(deadline).getTime() : NaN;
   const tooSoon = !Number.isFinite(deadlineMs) || deadlineMs < Date.now() + MIN_HOURS * 3600e3;
 
+  const n = (v: string) => (v.trim() === '' ? undefined : Number(v));
+  const budgetBad = n(budgetMin) !== undefined && n(budgetMax) !== undefined && (n(budgetMin) as number) > (n(budgetMax) as number);
+
   async function post() {
     if (tooSoon) {
       setErr(`The deadline must be at least ${MIN_HOURS} hours from now.`);
+      return;
+    }
+    if (budgetBad) {
+      setErr('The minimum budget cannot be above the maximum.');
       return;
     }
     setBusy(true); setErr(null);
@@ -55,11 +67,24 @@ export default function PostTenderModal({
         deadlineAt: new Date(deadline).toISOString(),
         title: title.trim() || undefined,
         notes: notes.trim() || undefined,
+        budgetMin: n(budgetMin),
+        budgetMax: n(budgetMax),
+        securityDeposit: n(deposit),
       });
-      const n = Number(r.data?.eligible_vendor_count ?? 0);
+      // Documents go up one by one once the tender exists. A failed upload does
+      // not undo the tender: it is reported, and can be retried from the
+      // tender's page.
+      const rfqId = r.data?.rfq?.id;
+      const failed: string[] = [];
+      for (const f of files) {
+        try { await uploadFile(`/tenders/${rfqId}/documents`, f); } catch { failed.push(f.name); }
+      }
+      const count = Number(r.data?.eligible_vendor_count ?? 0);
       onPosted(
-        `Tender ${r.data?.rfq?.rfq_number ?? ''} posted. ${n} eligible vendor${n === 1 ? '' : 's'} ` +
-        `can bid until ${new Date(r.data?.rfq?.deadline_at ?? deadline).toLocaleString()}.`,
+        `Tender ${r.data?.rfq?.rfq_number ?? ''} posted. ${count} eligible vendor${count === 1 ? '' : 's'} ` +
+        `can bid until ${new Date(r.data?.rfq?.deadline_at ?? deadline).toLocaleString()}.` +
+        (files.length ? ` ${files.length - failed.length} document(s) attached.` : '') +
+        (failed.length ? ` Could not attach: ${failed.join(', ')} (retry from the tender page).` : ''),
       );
     } catch (e: any) {
       setErr(e.message || 'Could not post the tender.');
@@ -136,8 +161,42 @@ export default function PostTenderModal({
             <span className="text-sm text-mute">{notes.length} / 4000</span>
           </label>
 
+          <div className="field-row">
+            <label className="field">
+              <span className="lbl">Minimum budget (optional)</span>
+              <input type="number" min={0} value={budgetMin} onChange={e => setBudgetMin(e.target.value)}
+                     disabled={busy} placeholder="PKR" data-tender-budget-min="" />
+            </label>
+            <label className="field">
+              <span className="lbl">Maximum budget (optional)</span>
+              <input type="number" min={0} value={budgetMax} onChange={e => setBudgetMax(e.target.value)}
+                     disabled={busy} placeholder="PKR" data-tender-budget-max="" />
+            </label>
+            <label className="field">
+              <span className="lbl">Security deposit (optional)</span>
+              <input type="number" min={0} value={deposit} onChange={e => setDeposit(e.target.value)}
+                     disabled={busy} placeholder="PKR" data-tender-deposit="" />
+            </label>
+          </div>
+          {budgetBad && (
+            <div className="text-sm" style={{ color: 'var(--danger)', marginTop: -8, marginBottom: 10 }}>
+              The minimum cannot be above the maximum.
+            </div>
+          )}
+
+          <label className="field">
+            <span className="lbl">Tender documents (optional)</span>
+            <input type="file" multiple disabled={busy} data-tender-files=""
+                   onChange={e => setFiles(Array.from(e.target.files ?? []))} />
+            <span className="text-sm text-mute" style={{ display: 'block', marginTop: 4 }}>
+              {files.length
+                ? `${files.length} file(s): ${files.map(f => f.name).join(', ')}`
+                : 'Specifications, drawings or terms. They are public with the tender.'}
+            </span>
+          </label>
+
           <div className="btn-row">
-            <button className="btn primary" onClick={post} disabled={busy || tooSoon} data-tender-post="">
+            <button className="btn primary" onClick={post} disabled={busy || tooSoon || budgetBad} data-tender-post="">
               {busy ? 'Posting…' : 'Post tender'}
             </button>
             <button className="btn ghost" onClick={onClose} disabled={busy}>Cancel</button>

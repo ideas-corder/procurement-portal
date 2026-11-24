@@ -76,7 +76,7 @@ const bids: MyBid[] = [
 test('My Bids: one row per joined tender with my own bid and status', () => {
   const html = renderToStaticMarkup(h(MyBidsList, { bids, onOpen: () => {}, nowMs: NOW }));
   assert.match(html, /V2 · PKR 83,000/);
-  assert.match(html, />Edit bid</);           // open, already bid
+  assert.doesNotMatch(html, />Edit bid</);    // tender bids are final
   assert.match(html, />Bid now</);            // open, not bid yet
   assert.match(html, />View</);               // closed
   assert.match(html, /Tender closed/);
