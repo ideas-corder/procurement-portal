@@ -64,6 +64,13 @@ export class VendorsController {
     return this.apps.approve(id, { id: u.id, role: u.role, costCenterIds: u.costCenterIds ?? [] }, body ?? {});
   }
 
+  /** POST /vendors/applications/:id/password-link — a fresh one-time set-password link. */
+  @Post('applications/:id/password-link')
+  async newPasswordLink(@Param('id', new ParseUUIDPipe()) id: string, @Req() req: any) {
+    const u = req.user as AuthenticatedUser;
+    return this.apps.newPasswordLink(id, { id: u.id, role: u.role, costCenterIds: u.costCenterIds ?? [] });
+  }
+
   /** POST /vendors/applications/:id/reject — body: { reason } (required). */
   @Post('applications/:id/reject')
   async rejectApplication(

@@ -84,17 +84,59 @@ check(JSON.stringify(master.data).includes(ap.data.vendor.vendorCode), 'new vend
 const again = await api(`/vendors/applications/${A.app.id}/approve`, { method: 'POST', token: procurement, body: {} });
 check(again.status === 409, 'a decided application cannot be approved again', `${again.status}`);
 
-// ── 2. the new supplier works ────────────────────────────────────────────────
-console.log('\n== 2. the new supplier can work ==');
-const vTok = await login(`ali${run}@example.test`);
+// ── 2. the one-time set-password link ───────────────────────────────────────
+console.log('\n== 2. set-password link and real supplier password ==');
+const link = ap.data?.passwordLink?.url ?? '';
+check(/\/set-password\/[A-Za-z0-9_-]{20,}$/.test(link), 'approval returns a set-password link', link);
+check(ap.data?.passwordLink?.emailQueued === true, 'and the email is queued in the outbox');
+const ob = sql(`SELECT count(*) FROM core.email_outbox WHERE template='supplier_set_password' AND to_email='ali${run}@example.test'`)[0][0];
+check(ob === '1', 'outbox row for the new supplier', ob);
+const token = link.split('/').pop();
+const tokRow = sql(`SELECT count(*) FROM core.password_set_tokens WHERE token_hash='${token}'`)[0][0];
+check(tokRow === '0', 'the raw token is not stored (only its hash)', tokRow);
+
+const EMAIL = `ali${run}@example.test`;
+const pre = await api('/auth/login', { method: 'POST', body: { email: EMAIL, password: 'anything' } });
+check(pre.status === 401 && /no password yet/.test(pre.data?.message ?? ''), 'cannot sign in before setting a password', `${pre.status} ${pre.data?.message}`);
+const desc = await api(`/auth/set-password/${token}`);
+check(desc.data?.valid === true && desc.data?.email === EMAIL, 'link describes the account', desc.data);
+const weak = await api('/auth/set-password', { method: 'POST', body: { token, password: 'short' } });
+check(weak.status === 400, 'a weak password is refused', `${weak.status} ${weak.data?.message}`);
+const PW = 'Tender2026x';
+const set = await api('/auth/set-password', { method: 'POST', body: { token, password: PW } });
+check(ok2xx(set), 'password set through the link', `${set.status} ${set.data?.message ?? ''}`);
+const reuse = await api('/auth/set-password', { method: 'POST', body: { token, password: 'Another2026y' } });
+check(reuse.status === 400 && /already been used/.test(reuse.data?.message ?? ''), 'the link works only once', `${reuse.status} ${reuse.data?.message}`);
+const wrong = await api('/auth/login', { method: 'POST', body: { email: EMAIL, password: 'Wrong2026z' } });
+check(wrong.status === 401, 'wrong password is refused', `${wrong.status}`);
+const hashed = sql(`SELECT supplier_password_hash LIKE '$2%' FROM core.users WHERE email='${EMAIL}'`)[0][0];
+check(hashed === 't', 'stored as a bcrypt hash');
+
+const reset = await api(`/vendors/applications/${A.app.id}/password-link`, { method: 'POST', token: procurement });
+const token2 = (reset.data?.passwordLink?.url ?? '').split('/').pop();
+check(ok2xx(reset) && token2 && token2 !== token, 'procurement can issue a fresh link', `${reset.status}`);
+const reset2 = await api(`/vendors/applications/${A.app.id}/password-link`, { method: 'POST', token: procurement });
+const token3 = (reset2.data?.passwordLink?.url ?? '').split('/').pop();
+check((await api(`/auth/set-password/${token2}`)).data?.valid === false, 'issuing a new link retires the previous one');
+check(ok2xx(await api('/auth/set-password', { method: 'POST', body: { token: token3, password: PW } })), 'the newest link works');
+
+const demo = await api('/auth/login', { method: 'POST', body: { email: 'vendor1@example.com', password: 'demo' } });
+check(demo.status === 201, 'seeded demo supplier still signs in as before', `${demo.status}`);
+const staff = await api('/auth/login', { method: 'POST', body: { email: 'finance@pakboxes.pk', password: 'x' } });
+check(staff.status === 201, 'staff sign-in unchanged', `${staff.status}`);
+
+// ── 3. the new supplier works ────────────────────────────────────────────────
+console.log('\n== 3. the new supplier can work ==');
+const vTok = await login(EMAIL, PW);
+check(Boolean(vTok), 'new supplier signs in with its own password');
 const tenders = await api('/supplier/tenders', { token: vTok });
 check(tenders.status === 200, 'new supplier signs in and opens the tender list', `${tenders.status}`);
 const inbox = await api('/supplier/inbox', { token: vTok });
 check(inbox.status === 200 && (inbox.data?.subtitle ?? '').includes(ap.data.vendor.vendorCode),
   'supplier inbox is scoped to the new vendor', inbox.data?.subtitle);
 
-// ── 3. refusals ──────────────────────────────────────────────────────────────
-console.log('\n== 3. refusals ==');
+// ── 4. refusals ──────────────────────────────────────────────────────────────
+console.log('\n== 4. refusals ==');
 const B = await apply('Bilal', { contactEmail: 'procurement@pakboxes.pk' });
 const dupEmail = await api(`/vendors/applications/${B.app.id}/approve`, { method: 'POST', token: procurement, body: {} });
 check(dupEmail.status === 409 && /already exists/.test(dupEmail.data?.message ?? ''), 'email that already has a login is refused', `${dupEmail.status} ${dupEmail.data?.message}`);

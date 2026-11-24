@@ -1,4 +1,5 @@
 import { Injectable, UnauthorizedException } from '@nestjs/common';
+import { SupplierAccountService } from './supplier-account.service';
 import { JwtService } from '@nestjs/jwt';
 import { DbService } from '../db/db.service';
 import { pgArray } from '../db/pg-array';
@@ -38,6 +39,7 @@ export class AuthService {
   constructor(
     private readonly db: DbService,
     private readonly jwt: JwtService,
+    private readonly suppliers: SupplierAccountService,
   ) {}
 
   /**
@@ -64,6 +66,12 @@ export class AuthService {
     );
     if (r.rows.length === 0) throw new UnauthorizedException('invalid credentials');
     const u = r.rows[0];
+    // Supplier logins check a real password (SupplierAccountService). Staff
+    // and the seeded demo suppliers keep the dev behaviour above.
+    if (u.role === 'vendor') {
+      const refusal = await this.suppliers.checkVendorPassword(u.id, input.password);
+      if (refusal) throw new UnauthorizedException(refusal);
+    }
     const user: AuthenticatedUser = {
       id: u.id,
       email: u.email,

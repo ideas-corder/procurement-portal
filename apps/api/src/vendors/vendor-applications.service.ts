@@ -4,6 +4,7 @@ import {
 import { roleAllowed } from '@procurement/roles';
 import { DbService } from '../db/db.service';
 import { VendorGovernanceService } from './vendor-governance.service';
+import { SupplierAccountService } from '../auth/supplier-account.service';
 
 /**
  * Approve or reject a public onboarding application (core.vendor_applications).
@@ -29,6 +30,7 @@ export class VendorApplicationsService {
   constructor(
     private readonly db: DbService,
     private readonly gov: VendorGovernanceService,
+    private readonly accounts: SupplierAccountService,
   ) {}
 
   private assertCanDecide(role: string) {
@@ -169,12 +171,34 @@ export class VendorApplicationsService {
       ctx,
     );
 
+    // ── 5. the one-time set-password link (shown once, also queued as email) ─
+    const link = await this.accounts.issueSetPasswordLink(login.id, user.id);
+
     return {
       application: { id, reference: app.reference, state: 'Approved' },
       vendor: { id: vendor.id, vendorCode: vendor.vendor_code, legalName: vendor.legal_name, state: vendor.state },
       login: { userId: login.id, email: login.email },
       categories: known.rows.map((r: any) => r.code),
+      // DELIVERED ONCE: only sha256 of the token is stored.
+      passwordLink: { url: link.link, expiresAt: link.expiresAt, emailQueued: Boolean(link.outboxId) },
     };
+  }
+
+  // ── POST /vendors/applications/:id/password-link ──────────────────────────
+  /** A fresh set-password link for an approved application's login (old one retired). */
+  async newPasswordLink(id: string, user: { id: string; role: string; costCenterIds: string[] }) {
+    this.assertCanDecide(user.role);
+    const r = await this.db.query<any>(
+      `SELECT reference, state, login_user_id FROM core.vendor_applications WHERE id = $1::uuid`,
+      [id], { userId: user.id, role: user.role, bypassRls: true },
+    );
+    if (r.rows.length === 0) throw new NotFoundException('application not found');
+    const a = r.rows[0];
+    if (a.state !== 'Approved' || !a.login_user_id) {
+      throw new ConflictException(`Application ${a.reference} has no supplier login to send a link for.`);
+    }
+    const link = await this.accounts.issueSetPasswordLink(a.login_user_id, user.id);
+    return { reference: a.reference, passwordLink: { url: link.link, expiresAt: link.expiresAt, emailQueued: Boolean(link.outboxId) } };
   }
 
   // ── POST /vendors/applications/:id/reject ─────────────────────────────────
