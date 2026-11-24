@@ -10,7 +10,7 @@
 //   3. each supplier sets its own password from the one-time link and signs in,
 //   4. a requester raises a PR, the HOD approves it,
 //   5. procurement posts an open tender; bids stay sealed,
-//   6. both new suppliers see it, bid, and one revises before the deadline,
+//   6. both new suppliers see it and bid once (tender bids are final),
 //   7. the deadline passes, the API timer closes the tender, procurement is notified,
 //   8. then one of two routes to D365 (both exist in this codebase):
 //
@@ -125,8 +125,9 @@ async function tenderToClosed(label, p1, p2, { readyForCs = true } = {}) {
       leadTime: '7 days', warranty: '1 yr', paymentTerms: '30 days' } });
   }
   check(ok2xx(await bid(S1, p1)), `${label}: ${S1.tag} bids ${p1}`);
-  check(ok2xx(await bid(S2, p2 + 1500)), `${label}: ${S2.tag} bids ${p2 + 1500}`);
-  check(ok2xx(await bid(S2, p2)), `${label}: ${S2.tag} revises to ${p2} before the deadline`);
+  check(ok2xx(await bid(S2, p2)), `${label}: ${S2.tag} bids ${p2}`);
+  // Tender bids are final: a second submission is refused.
+  check((await bid(S2, p2 - 1000)).status === 409, `${label}: ${S2.tag} cannot change its bid (final)`);
 
   const sealed = await api(`/pr/${prId}/sourcing`, { token: procurement });
   check(sealed.data?.procurement?.rfq?.sealed === true && sealed.data.procurement.quotes.every(q => q.total === null),

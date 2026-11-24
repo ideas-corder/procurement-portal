@@ -1,6 +1,6 @@
 import { Body, Controller, Get, Param, Post, Req, UseGuards } from '@nestjs/common';
 import {
-  IsArray, IsBoolean, IsISO8601, IsOptional, IsString, Matches, MaxLength,
+  IsArray, IsBoolean, IsISO8601, IsNumber, IsOptional, IsString, Matches, MaxLength, Min,
 } from 'class-validator';
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import { RfqService } from './rfq.service';
@@ -35,6 +35,10 @@ class PostTenderDto {
   @IsOptional() @IsString() @MaxLength(4000) notes?: string;
   @IsOptional() @IsString() @MaxLength(8) currency?: string;
   @IsOptional() @IsString() @MaxLength(32) incoterm?: string;
+  /** Optional published budget range and security deposit (migration 079). */
+  @IsOptional() @IsNumber() @Min(0) budgetMin?: number;
+  @IsOptional() @IsNumber() @Min(0) budgetMax?: number;
+  @IsOptional() @IsNumber() @Min(0) securityDeposit?: number;
 }
 
 class InviteVendorDto {

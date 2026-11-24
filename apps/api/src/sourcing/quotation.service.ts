@@ -548,7 +548,7 @@ export class QuotationService {
       // 404, not a 403 — a 403 would confirm the invitation exists.
       const inv = await run<any>(
         `SELECT i.id, i.rfq_id, i.vendor_id, i.submitted, i.declined,
-                rf.state AS rfq_state, rf.currency AS rfq_currency
+                rf.state AS rfq_state, rf.currency AS rfq_currency, rf.sourcing_mode, rf.rfq_number
            FROM proc.rfq_invitations i
            JOIN proc.rfq rf ON rf.id = i.rfq_id
           WHERE i.id = $1::uuid AND i.vendor_id = $2::uuid`,
@@ -556,6 +556,25 @@ export class QuotationService {
       );
       if (inv.rows.length === 0) throw new NotFoundException('invitation not found');
       const invitation = inv.rows[0];
+
+      // OPEN TENDER: ONE BID, FINAL. A supplier cannot revise a tender bid once
+      // it is in (user decision, 2026-11-24). An invited RFQ keeps its revision
+      // chain unchanged.
+      if (invitation.sourcing_mode === 'open_tender') {
+        const prior = await run<any>(
+          `SELECT version FROM proc.quotations
+            WHERE rfq_id = $1::uuid AND vendor_id = $2::uuid
+              AND state IN ('Submitted','Awarded','Rejected')
+            LIMIT 1`,
+          [invitation.rfq_id, expectedVendorId],
+        );
+        if (prior.rows.length > 0) {
+          throw new ConflictException(
+            `Your bid on tender ${invitation.rfq_number} is already submitted and is final. ` +
+            'Tender bids cannot be changed.',
+          );
+        }
+      }
 
       if (invitation.rfq_state !== 'Open') {
         throw new BadRequestException(`RFQ is ${invitation.rfq_state} - quotes can no longer be submitted`);

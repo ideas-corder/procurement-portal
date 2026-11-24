@@ -36,6 +36,8 @@ export type SupplierQuoteBody = {
   warranty?: string | null;
   paymentTerms?: string | null;
   remarks?: string | null;
+  /** The supplier's own bid document (tenders), uploaded first. */
+  attachmentId?: string | null;
 };
 
 /**
@@ -447,8 +449,26 @@ export class SupplierService {
     const warranty = body?.warranty ? warrantyMonths(body.warranty) : null;
     const paymentDays = body?.paymentTerms ? paymentTermsDays(body.paymentTerms) : null;
 
+    // The bid document must be one THIS supplier uploaded to THIS tender.
+    // Checked here because QuotationService only checks that the file exists.
+    let attachmentId: string | undefined;
+    if (body?.attachmentId) {
+      const doc = await this.db.query<any>(
+        `SELECT a.id FROM core.attachment_registry a
+          WHERE a.id = $1::uuid AND a.parent_type = 'rfq' AND a.parent_id = $2::uuid
+            AND a.uploaded_by_user_id = $3::uuid AND a.status = 'ACTIVE'`,
+        [body.attachmentId, (form as any).invitation.rfqId, user.id],
+        { userId: user.id, role: user.role, costCenterIds: user.costCenterIds, bypassRls: true },
+      );
+      if (doc.rows.length === 0) {
+        throw new BadRequestException('The attached document was not uploaded by you for this tender. Upload it again.');
+      }
+      attachmentId = body.attachmentId;
+    }
+
     const quotationInput: QuotationInput = {
       vendorId,
+      ...(attachmentId ? { attachmentId } : {}),
       // The prototype's form prices per line, and the headline total is
       // derived from them. Passing the client's stated total too lets
       // QuotationService refuse a total that disagrees with the sum, rather

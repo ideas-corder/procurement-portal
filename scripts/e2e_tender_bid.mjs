@@ -181,9 +181,10 @@ const b2 = await api(`/supplier/rfq/${inv2}/quote`, { method: 'POST', token: ven
 check([200, 201].includes(b2.status), 'vendor2 bid submitted', `${b2.status} ${JSON.stringify(b2.data).slice(0, 200)}`);
 
 const b1v2 = await api(`/supplier/rfq/${inv1}/quote`, { method: 'POST', token: vendor1, body: bid(41500) });
-check([200, 201].includes(b1v2.status), 'vendor1 revised its bid before the deadline', `${b1v2.status}`);
+// Tender bids are FINAL (user decision 2026-11-24): a second submission is refused.
+check(b1v2.status === 409 && /final/.test(b1v2.data?.message ?? ''), 'vendor1 cannot change its bid: tender bids are final', `${b1v2.status} ${b1v2.data?.message}`);
 const live1 = sql(`SELECT version FROM proc.quotations WHERE rfq_id='${rfqId}' AND vendor_id='${V1}' AND state='Submitted'`);
-check(live1.length === 1 && live1[0][0] === '2', 'vendor1 has one live bid, version 2', JSON.stringify(live1));
+check(live1.length === 1 && live1[0][0] === '1', 'vendor1 keeps its one bid, version 1', JSON.stringify(live1));
 
 // ── 5. sealed ────────────────────────────────────────────────────────────────
 console.log('\n== 5. sealed bids ==');
@@ -211,14 +212,16 @@ sql(`UPDATE proc.rfq
             deadline_at = now() - interval '1 minute'
       WHERE id = '${rfqId}'`);
 const late = await api(`/supplier/rfq/${inv1}/quote`, { method: 'POST', token: vendor1, body: bid(30000) });
-check(late.status === 400 && /closed/i.test(late.data?.message ?? ''), 'late bid refused', `${late.status} ${late.data?.message}`);
+// vendor1 already bid, so the final-bid rule answers first (409); the deadline
+// itself is proven on the procurement path below.
+check([400, 409].includes(late.status) && /closed|final/i.test(late.data?.message ?? ''), 'late bid refused', `${late.status} ${late.data?.message}`);
 const lateForm = await api(`/supplier/rfq/${inv1}`, { token: vendor1 });
 check(lateForm.data?.canSubmit === false, 'quote form reports canSubmit=false');
 list = await api('/supplier/tenders', { token: vendor1 });
 check(!list.data.openTenders.some(t => t.rfqId === rfqId), 'closed tender not in Open Tenders');
 const mb = list.data.myBids.find(b => b.rfqId === rfqId);
-check(mb?.status === 'Tender closed' && mb.canBid === false && mb.myBid?.version === 2,
-  'My Bids: Tender closed, my bid v2 kept', JSON.stringify(mb));
+check(mb?.status === 'Tender closed' && mb.canBid === false && mb.myBid?.version === 1,
+  'My Bids: Tender closed, my bid kept', JSON.stringify(mb));
 const quotes = await api(`/pr/${prId}/quotes`, { token: procurement });
 const procLate = await api(`/rfq/${rfqId}/quotations`, {
   method: 'POST', token: procurement,

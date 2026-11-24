@@ -102,6 +102,8 @@ class CreatePrImageDto {
 }
 
 class CreatePrDto {
+  /** 'tender' raises a Tender Request; same routing as any PR. */
+  @IsOptional() @IsIn(['standard', 'tender']) sourcingPreference?: 'standard' | 'tender';
   @IsString() scope!: string;
   @IsIn(['CAPEX', 'OPEX', 'MIXED']) expenseType!: 'CAPEX' | 'OPEX' | 'MIXED';
   @Matches(UUID_RE, { message: 'costCenterId must be a UUID' }) costCenterId!: string;

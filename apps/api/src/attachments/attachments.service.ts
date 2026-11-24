@@ -143,17 +143,35 @@ export class AttachmentsService {
     if (!roleAllowed(role, 'procurement,hod,requester,cs')) {
       throw new ForbiddenException('Only the requester or an approver may attach files to a PR.');
     }
-
-    const lim = await this.limits.get();
-    const isImage = (declaredKind ?? '') === 'image' || String(mimeType).startsWith('image/');
-    const maxBytes = isImage ? lim.imagePerFileBytes : lim.perFileBytes;
-
     const pr = await this.db.query<any>(
       `SELECT id FROM proc.purchase_requisitions WHERE id = $1::uuid`,
       [prId],
       { role, userId, costCenterIds },
     );
     if (pr.rows.length === 0) throw new NotFoundException('PR not found');
+    return this.uploadToParent('pr', prId, userId, role, costCenterIds, req, filename, mimeType, declaredKind);
+  }
+
+  /**
+   * The shared write path behind every upload: PR files, and (migration 079)
+   * files hung off an RFQ — the documents procurement publishes with an open
+   * tender, and the document a supplier attaches to its tender bid.
+   *
+   * The CALLER owns the permission check and the parent check; this owns the
+   * configured size ceilings, the disk write and the one-statement metadata
+   * insert (see the comments below). `bypassRls` is used for the 'rfq' parent
+   * because a supplier session has no PR-scoped visibility.
+   */
+  async uploadToParent(
+    parentType: 'pr' | 'rfq', parentId: string,
+    userId: string, role: string, costCenterIds: string[],
+    req: any, filename: string, mimeType: string, declaredKind?: string,
+  ): Promise<UploadResult> {
+    const lim = await this.limits.get();
+    const isImage = (declaredKind ?? '') === 'image' || String(mimeType).startsWith('image/');
+    const maxBytes = isImage ? lim.imagePerFileBytes : lim.perFileBytes;
+    const prId = parentId;
+    const dbCtx: any = { role, userId, costCenterIds, ...(parentType === 'rfq' ? { bypassRls: true } : {}) };
 
     const safe = StorageAdapter.safeName(filename);
     const data = await this.readBody(req, maxBytes);
@@ -163,10 +181,13 @@ export class AttachmentsService {
     // V1 does not disturb V2's own files.
     const prior = await this.db.query<any>(
       `SELECT id, version FROM core.attachment_registry
-        WHERE parent_type='pr' AND parent_id=$1::uuid AND name=$2 AND status='ACTIVE'
+        WHERE parent_type=$3 AND parent_id=$1::uuid AND name=$2 AND status='ACTIVE'
+          -- On an RFQ every uploader is kept apart: two suppliers both sending
+          -- "quote.pdf" must not supersede each other's document.
+          AND ($3 <> 'rfq' OR uploaded_by_user_id = $4::uuid)
         ORDER BY version DESC LIMIT 1`,
-      [prId, safe],
-      { role, userId, costCenterIds },
+      [prId, safe, parentType, userId],
+      dbCtx,
     );
 
     const stored = await this.storage.put(safe, data);
@@ -202,12 +223,12 @@ export class AttachmentsService {
          ), nxt AS (
            SELECT COALESCE(MAX(version),0) + 1 AS v
              FROM core.attachment_registry
-            WHERE parent_type='pr' AND parent_id=$7::uuid AND name=$8
+            WHERE parent_type=$10 AND parent_id=$7::uuid AND name=$8
          ), ins AS (
            INSERT INTO core.attachment_registry
              (name, file_id, mime_type, size_bytes, kind, parent_type, parent_id,
               visibility, status, version, uploaded_by_user_id)
-           SELECT $8, f.id, $3, $4, core.fn_attachment_kind($3), 'pr', $7::uuid,
+           SELECT $8, f.id, $3, $4, core.fn_attachment_kind($3), $10, $7::uuid,
                   'internal', 'ACTIVE', nxt.v, $6::uuid
              FROM f, nxt
            RETURNING id, version, status, kind
@@ -222,9 +243,9 @@ export class AttachmentsService {
         [
           stored.bucket, stored.objectKey, mimeType || 'application/octet-stream',
           stored.size, stored.sha256, userId,
-          prId, safe, prior.rows[0]?.id ?? null,
+          prId, safe, prior.rows[0]?.id ?? null, parentType,
         ],
-        { role, userId, costCenterIds },
+        dbCtx,
       );
       const row = r.rows[0];
       if (!row) throw new BadRequestException('the attachment could not be recorded');
@@ -234,7 +255,7 @@ export class AttachmentsService {
           `INSERT INTO core.attachment_audit (attachment_id, action, actor_user_id, detail)
            VALUES ($1::uuid, 'SUPERSEDED', $2::uuid, $3::jsonb)`,
           [prior.rows[0].id, userId, JSON.stringify({ superseded_by: row.id })],
-          { role, userId, costCenterIds },
+          dbCtx,
         ).catch((e: any) => this.log.warn(`audit write failed (non-fatal): ${e?.message}`));
       }
 
@@ -242,7 +263,7 @@ export class AttachmentsService {
         `INSERT INTO core.attachment_audit (attachment_id, action, actor_user_id, detail)
          VALUES ($1::uuid, 'UPLOADED', $2::uuid, $3::jsonb)`,
         [row.id, userId, JSON.stringify({ name: safe, size: stored.size, object_key: stored.objectKey })],
-        { role, userId, costCenterIds },
+        dbCtx,
       ).catch((e: any) => this.log.warn(`audit write failed (non-fatal): ${e?.message}`));
 
       return {
@@ -339,6 +360,33 @@ export class AttachmentsService {
       { role, userId, costCenterIds },
     ).catch((e: any) => this.log.warn(`audit write failed (non-fatal): ${e?.message}`));
 
+    return {
+      stream: createReadStream(abs),
+      name: String(row.name),
+      mimeType: String(row.mime_type || 'application/octet-stream'),
+      size: Number(row.size_bytes),
+    };
+  }
+
+  /**
+   * A document procurement PUBLISHED with a tender (proc.rfq_documents), for the
+   * public open-tender pages. Only files listed there are served: a supplier's
+   * own bid document also hangs off the RFQ but is never listed, so it can never
+   * be fetched through this path.
+   */
+  async openTenderDocument(rfqId: string, attachmentId: string) {
+    const r = await this.db.query<any>(
+      `SELECT a.id, a.name, a.mime_type, a.size_bytes, a.status, f.object_key
+         FROM proc.rfq_documents d
+         JOIN core.attachment_registry a ON a.id = d.attachment_id
+         JOIN core.files f ON f.id = a.file_id
+        WHERE d.rfq_id = $1::uuid AND d.attachment_id = $2::uuid AND a.status <> 'VOID'`,
+      [rfqId, attachmentId],
+      { bypassRls: true },
+    );
+    if (r.rows.length === 0) throw new NotFoundException('no such tender document');
+    const row = r.rows[0];
+    const abs = this.storage.absolute(String(row.object_key));
     return {
       stream: createReadStream(abs),
       name: String(row.name),

@@ -307,6 +307,10 @@ export type ReissueRfqInput = {
  */
 export type PostTenderInput = {
   deadlineAt: string;
+  /** Optional published terms (migration 079). */
+  budgetMin?: number | null;
+  budgetMax?: number | null;
+  securityDeposit?: number | null;
   title?: string;
   /** Requirement / terms text shown to bidders. */
   notes?: string;
@@ -844,6 +848,14 @@ export class RfqService {
     if (notes.length > 4000) {
       throw new BadRequestException('notes must be at most 4000 characters');
     }
+    const num = (v: any) => (v === null || v === undefined || v === '' ? null : Number(v));
+    const budgetMin = num(body.budgetMin), budgetMax = num(body.budgetMax), deposit = num(body.securityDeposit);
+    for (const [k, v] of [['budgetMin', budgetMin], ['budgetMax', budgetMax], ['securityDeposit', deposit]] as const) {
+      if (v !== null && (!Number.isFinite(v) || v < 0)) throw new BadRequestException(`${k} must be a non-negative number`);
+    }
+    if (budgetMin !== null && budgetMax !== null && budgetMin > budgetMax) {
+      throw new BadRequestException('The minimum budget cannot be above the maximum.');
+    }
 
     return this.db.withTransaction({ userId, role, costCenterIds }, async (run) => {
       const p = await this.preflightNewRfq(run, prId);
@@ -858,6 +870,14 @@ export class RfqService {
         singleSourceJustification: undefined,
         tenderNotes: notes || null,
       });
+
+      if (budgetMin !== null || budgetMax !== null || deposit !== null) {
+        await run(
+          `UPDATE proc.rfq SET budget_min = $2, budget_max = $3, security_deposit = $4
+            WHERE id = $1::uuid RETURNING id`,
+          [rfq.id, budgetMin, budgetMax, deposit],
+        );
+      }
 
       // Same rule joinTender() applies: eligible AND mapped to a category on
       // at least one of this tender's lines.
@@ -880,6 +900,9 @@ export class RfqService {
           state: 'Open',
           sourcing_mode: 'open_tender',
           tender_notes: notes || null,
+          budget_min: budgetMin,
+          budget_max: budgetMax,
+          security_deposit: deposit,
           currency: rfq.currency,
           deadline_at: rfq.deadline_at,
           issued_at: rfq.issued_at,

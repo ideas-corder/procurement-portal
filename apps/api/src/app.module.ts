@@ -22,6 +22,7 @@ import { DispatchModule } from './dispatch/dispatch.module';
 import { VendorPortalModule } from './vendor-portal/vendor-portal.module';
 import { AwardModule } from './sourcing/award.module';
 import { NotificationsModule } from './notifications/notifications.module';
+import { TendersModule } from './tenders/tenders.module';
 
 @Module({
   imports: [
@@ -40,6 +41,7 @@ import { NotificationsModule } from './notifications/notifications.module';
     GovernanceModule,
     SupplierModule,
     NotificationsModule,
+    TendersModule,
     OnboardingModule,
     // Must load before PrModule so the PR service can route off live config.
     WorkflowModule,

@@ -133,6 +133,8 @@ export type CreatePrLineInput = {
 };
 
 export type CreatePrInput = {
+  /** 'tender' marks a Tender Request (migration 079). Routing is unchanged. */
+  sourcingPreference?: 'standard' | 'tender';
   scope: string;
   expenseType: 'CAPEX' | 'OPEX' | 'MIXED';
   costCenterId: string;
@@ -1489,8 +1491,8 @@ export class PrService {
              (pr_number, requester_user_id, department_id, cost_center_id,
               expense_type, required_by_date, status, urgency,
               scope, flow_kind, title, description, purpose,
-              estimated_amount, amount_status, currency, routing_key)
-           VALUES ($1, $2, $3, $4, $5, $6, 'Submitted', $7, $8, 'LIGHT', $9, $10, $11, $12, $13, 'PKR', $14)
+              estimated_amount, amount_status, currency, routing_key, sourcing_preference)
+           VALUES ($1, $2, $3, $4, $5, $6, 'Submitted', $7, $8, 'LIGHT', $9, $10, $11, $12, $13, 'PKR', $14, $15)
            RETURNING id`,
           [
             prNumber, userId, cc.rows[0].department_id, input.costCenterId,
@@ -1498,6 +1500,7 @@ export class PrService {
             input.scope, input.title || null, input.description || null, input.purpose || null,
             total, amountKnown ? 'ESTIMATED' : 'UNKNOWN',
             routing.rows[0]?.routing_key ?? 'STANDARD',
+            input.sourcingPreference === 'tender' ? 'tender' : 'standard',
           ],
         );
         const prId = ins.rows[0].id;
@@ -2309,8 +2312,10 @@ export class PrService {
            (pr_number, requester_user_id, department_id, cost_center_id,
             expense_type, required_by_date, status, urgency, scope,
             title, description, purpose, parent_pr_id,
-            estimated_amount, currency, routing_key, workflow_snapshot)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 'PKR', $15, $16::jsonb)
+            estimated_amount, currency, routing_key, workflow_snapshot, sourcing_preference)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 'PKR', $15, $16::jsonb,
+                 -- A tender request stays a tender request after a split.
+                 (SELECT sourcing_preference FROM proc.purchase_requisitions WHERE id = $13::uuid))
          RETURNING id`,
         [
           prNumber, parent.requester_user_id, parent.department_id, parent.cost_center_id,
@@ -2330,6 +2335,24 @@ export class PrService {
         ],
       );
       const childId = ins.rows[0].id;
+
+      // The child keeps the parent's department approver. Without these rows the
+      // CS blind review refused every split child ("no department approver
+      // mapped"), so a multi-category request could never finish. The approver is
+      // RESOLVED for the department, not copied, so the approver gate accepts it
+      // even if the department's HOD changed after the parent was raised
+      // (migration 079 backfilled the children created before this).
+      await run(
+        `INSERT INTO proc.pr_departments
+           (pr_id, department_id, hod_user_id, hod_status, hod_comment, hod_decided_at, suggested)
+         SELECT $1::uuid, d.department_id, core.fn_resolve_department_hod(d.department_id),
+                d.hod_status, d.hod_comment, d.hod_decided_at, d.suggested
+           FROM proc.pr_departments d
+          WHERE d.pr_id = $2::uuid
+         ON CONFLICT (pr_id, department_id) DO NOTHING
+         RETURNING pr_id`,
+        [childId, parent.id],
+      );
 
       // Re-number the child's lines from 1 — the subset is a fresh document.
       for (let n = 0; n < draft.parentLineIdxs.length; n++) {

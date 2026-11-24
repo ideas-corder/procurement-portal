@@ -1,5 +1,5 @@
 import { Body, Controller, Get, Param, ParseUUIDPipe, Post, Req, UseGuards } from '@nestjs/common';
-import { IsArray, IsInt, IsNumber, IsOptional, IsString, MaxLength, Min } from 'class-validator';
+import { IsArray, IsInt, IsNumber, IsOptional, IsString, IsUUID, MaxLength, Min } from 'class-validator';
 import { Type } from 'class-transformer';
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import { SupplierGuard } from './supplier.guard';
@@ -26,6 +26,8 @@ class SupplierQuoteDto {
   @IsOptional() @IsString() @MaxLength(40) warranty?: string;
   @IsOptional() @IsString() @MaxLength(40) paymentTerms?: string;
   @IsOptional() @IsString() @MaxLength(2000) remarks?: string;
+  /** A document the supplier uploaded for this tender bid (POST /supplier/tenders/:rfqId/documents). */
+  @IsOptional() @IsUUID() attachmentId?: string;
 }
 
 class DeclineDto {
