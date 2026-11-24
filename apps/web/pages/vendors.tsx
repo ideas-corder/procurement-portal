@@ -66,6 +66,7 @@ export default function Vendors() {
   const user = session?.user;
   const [data, setData] = useState<VendorMasterData | null>(null);
   const [err, setErr] = useState('');
+  const [pendingApps, setPendingApps] = useState<number | null>(null);
 
   const allowed = user ? canSeeScreen(user.role, 'vendors') : false;
 
@@ -83,6 +84,16 @@ export default function Vendors() {
     if (allowed) load();
   }, [allowed, load]);
 
+  // Onboarding applications are decided on their own screen
+  // (/vendor-applications); this only says how many are waiting.
+  const canDecide = user ? ['procurement', 'cs', 'admin'].includes(user.role) : false;
+  useEffect(() => {
+    if (!canDecide) return;
+    api.get('/vendors/applications')
+      .then(({ data: d }: any) => setPendingApps(Number(d?.totals?.pending ?? 0)))
+      .catch(() => setPendingApps(null));
+  }, [canDecide]);
+
   return (
     <Shell title="Vendor Master" subtitle="Approved suppliers and their standing" screenId="vendors">
       {!allowed && (
@@ -95,6 +106,15 @@ export default function Vendors() {
       {allowed && err && (
         <div className="card mb-4" style={{ borderColor: 'var(--danger)' }}>
           <div className="card-b">{err}</div>
+        </div>
+      )}
+
+      {allowed && canDecide && pendingApps !== null && (
+        <div className="alert info" data-pending-applications="">
+          <div>
+            <b>{pendingApps}</b> onboarding application{pendingApps === 1 ? '' : 's'} waiting for a decision.{' '}
+            <Link href="/vendor-applications">Review applications &rarr;</Link>
+          </div>
         </div>
       )}
 

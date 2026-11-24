@@ -272,6 +272,7 @@ code, .mono { font-family: 'JetBrains Mono', monospace; }
 
 /* ============================ FORM CONTROLS ============================ */
 input[type="text"], input[type="number"], input[type="email"], input[type="date"],
+input[type="password"], input[type="datetime-local"],
 input:not([type]), select, textarea {
   font-family: inherit; color: var(--text);
   border: 1px solid var(--input-border);

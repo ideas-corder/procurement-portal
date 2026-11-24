@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/router';
 import { useSession } from '../lib/session';
 
@@ -9,6 +9,13 @@ export default function Login() {
   const [password, setPassword] = useState('demo');
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+
+  // Arriving from the supplier set-password page: `/?email=...` pre-fills the
+  // address and leaves the password empty for the one just chosen.
+  useEffect(() => {
+    const q = router.query.email;
+    if (typeof q === 'string' && q) { setEmail(q); setPassword(''); }
+  }, [router.query.email]);
 
   if (session) {
     if (typeof window !== 'undefined') router.replace('/dashboard');
