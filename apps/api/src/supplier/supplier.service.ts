@@ -600,13 +600,34 @@ export class SupplierService {
         `SELECT i.id AS invitation_id, rf.id AS rfq_id, rf.rfq_number, rf.title,
                 rf.state AS rfq_state, rf.deadline_at, rf.currency,
                 (rf.deadline_at <= now()) AS past_deadline,
-                q.version AS my_version, q.total_amount AS my_total
+                q.version AS my_version, q.total_amount AS my_total,
+                (dec.id IS NOT NULL) AS decided,
+                (dec.id IS NOT NULL AND (
+                   EXISTS (SELECT 1 FROM proc.cs_line_awards a
+                            WHERE a.cs_id = dec.id AND a.vendor_id = $1::uuid
+                              AND a.superseded_at IS NULL)
+                OR EXISTS (SELECT 1 FROM proc.quotations qa
+                            WHERE qa.rfq_id = rf.id AND qa.vendor_id = $1::uuid
+                              AND qa.state = 'Awarded'))) AS won
            FROM proc.rfq_invitations i
            JOIN proc.rfq rf ON rf.id = i.rfq_id AND rf.sourcing_mode = 'open_tender'
+           -- My live bid. A CS lock turns it Awarded/Rejected, which is still
+           -- my bid; only superseded and withdrawn versions are not.
            LEFT JOIN LATERAL (
              SELECT version, total_amount FROM proc.quotations
-              WHERE rfq_id = rf.id AND vendor_id = $1::uuid AND state = 'Submitted'
+              WHERE rfq_id = rf.id AND vendor_id = $1::uuid
+                AND state IN ('Submitted', 'Awarded', 'Rejected')
               ORDER BY version DESC LIMIT 1) q ON true
+           -- The decision, once it is FINAL: a locked CS, or a CS whose review
+           -- was confirmed. Before that the vendor learns nothing, because the
+           -- award can still change during review.
+           LEFT JOIN LATERAL (
+             SELECT cs.id FROM proc.comparative_statements cs
+              WHERE cs.pr_id = rf.pr_id
+                AND (cs.state = 'Locked'
+                     OR EXISTS (SELECT 1 FROM proc.cs_reviews r
+                                 WHERE r.cs_id = cs.id AND r.sub_state = 'CONFIRMED'))
+              ORDER BY cs.cs_round DESC LIMIT 1) dec ON true
           WHERE i.vendor_id = $1::uuid
           ORDER BY rf.deadline_at DESC`,
         [vendorId],
@@ -639,8 +660,11 @@ export class SupplierService {
           myBid: hasBid
             ? { version: Number(r.my_version), total: r.my_total === null ? null : Number(r.my_total) }
             : null,
-          // Won / Lost arrives with award, in a later step.
-          status: closed ? 'Tender closed' : hasBid ? 'Submitted' : 'Not submitted',
+          // Won / Not selected only once the CS is final (see the `dec` join),
+          // and only for a vendor that actually bid.
+          status: hasBid && r.decided === true
+            ? (r.won === true ? 'Won' : 'Not selected')
+            : closed ? 'Tender closed' : hasBid ? 'Submitted' : 'Not submitted',
           canBid: !closed,
         };
       }),

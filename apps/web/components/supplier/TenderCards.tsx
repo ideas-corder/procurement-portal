@@ -25,7 +25,8 @@ export type MyBid = {
   currency: string;
   tenderState: string;
   myBid: { version: number; total: number | null } | null;
-  status: 'Not submitted' | 'Submitted' | 'Tender closed' | string;
+  /** 'Won' / 'Not selected' appear only once the comparative statement is final. */
+  status: 'Not submitted' | 'Submitted' | 'Tender closed' | 'Won' | 'Not selected' | string;
   canBid: boolean;
 };
 
@@ -65,6 +66,8 @@ const STATUS_PILL: Record<string, string> = {
   'Submitted': 'success',
   'Not submitted': 'warn',
   'Tender closed': 'draft',
+  'Won': 'success',
+  'Not selected': 'draft',
 };
 
 // ─── Open Tenders ───────────────────────────────────────────────────────────

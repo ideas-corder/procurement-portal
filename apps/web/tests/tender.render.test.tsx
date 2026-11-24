@@ -85,6 +85,16 @@ test('My Bids: one row per joined tender with my own bid and status', () => {
   assert.equal((html.match(/closes in/g) || []).length, 2);
 });
 
+test('My Bids: a final outcome shows as Won / Not selected', () => {
+  const decided: MyBid[] = [
+    { ...bids[2], invitationId: 'i-4', rfqId: 't-4', status: 'Won' },
+    { ...bids[2], invitationId: 'i-5', rfqId: 't-5', status: 'Not selected' },
+  ];
+  const html = renderToStaticMarkup(h(MyBidsList, { bids: decided, nowMs: NOW }));
+  assert.match(html, /class="pill success"[^>]*>Won</);
+  assert.match(html, /class="pill draft"[^>]*>Not selected</);
+});
+
 test('My Bids: empty state', () => {
   const html = renderToStaticMarkup(h(MyBidsList, { bids: [] }));
   assert.match(html, /You have not bid on any tender yet/);
