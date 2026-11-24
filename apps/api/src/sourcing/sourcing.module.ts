@@ -6,6 +6,7 @@ import { QuotationController } from './quotation.controller';
 import { QuotationService } from './quotation.service';
 import { CsService } from './cs.service';
 import { CsReviewService } from './cs.review.service';
+import { TenderCloserService } from './tender-closer.service';
 // CsReviewService.confirm() routes the PR through the configured cs_review step,
 // the same way PrService does. The workflow module is therefore a real
 // dependency here, not a convenience import.
@@ -22,7 +23,7 @@ import { WorkflowModule } from '../workflow/workflow.module';
 @Module({
   imports: [AuthModule, WorkflowModule],
   controllers: [RfqController, RfqIssueController, QuotationController],
-  providers: [RfqService, QuotationService, CsService, CsReviewService],
+  providers: [RfqService, QuotationService, CsService, CsReviewService, TenderCloserService],
   exports: [RfqService, QuotationService, CsService, CsReviewService],
 })
 export class SourcingModule {}

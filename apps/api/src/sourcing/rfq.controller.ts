@@ -58,6 +58,16 @@ export class RfqController {
     return this.svc.list(u.id, u.role, u.costCenterIds);
   }
 
+  /**
+   * `POST /rfq/tenders/close-due` — close every open tender past its deadline
+   * now, instead of waiting for the next TenderCloserService tick. Procurement
+   * only. Idempotent: returns the tenders it closed, usually none.
+   */
+  @Post('tenders/close-due')
+  async closeDueTenders(@Req() req: any) {
+    return this.svc.closeDueTendersAs(req.user.role);
+  }
+
   @Get(':id')
   async get(@Param('id') id: string, @Req() req: any) {
     const u = req.user;

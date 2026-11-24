@@ -882,6 +882,35 @@ export class RfqService {
     });
   }
 
+  // ── closing tenders at the deadline ─────────────────────────────────────
+  /**
+   * Close every open tender past its deadline (migration 077 does the work in
+   * one SQL call: state -> Closed, audit row, procurement notifications).
+   * Called by TenderCloserService on a timer and by `POST /rfq/tenders/close-due`.
+   */
+  async closeDueTenders(): Promise<Array<{ rfqId: string; rfqNumber: string; prId: string; deadlineAt: string; bids: number }>> {
+    const r = await this.db.query<any>(
+      `SELECT rfq_id, rfq_number, pr_id, deadline_at, bids FROM proc.fn_close_due_tenders()`,
+      [],
+      { bypassRls: true },
+    );
+    return r.rows.map((x: any) => ({
+      rfqId: x.rfq_id,
+      rfqNumber: x.rfq_number,
+      prId: x.pr_id,
+      deadlineAt: x.deadline_at,
+      bids: Number(x.bids ?? 0),
+    }));
+  }
+
+  async closeDueTendersAs(role: string) {
+    if (!roleAllowed(role, 'procurement')) {
+      throw new ForbiddenException('Only Procurement can close tenders.');
+    }
+    const closed = await this.closeDueTenders();
+    return { closed, count: closed.length };
+  }
+
   // ── POST /supplier/tenders/:rfqId/join ──────────────────────────────────
   /**
    * A vendor opens an open tender to bid on it. Creates the vendor's

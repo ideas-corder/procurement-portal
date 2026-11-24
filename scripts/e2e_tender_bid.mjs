@@ -233,5 +233,40 @@ const liveAll = sql(`SELECT count(*) FROM proc.quotations WHERE rfq_id='${rfqId}
 check(liveAll === '2', 'two live bids on the tender', liveAll);
 check(quotes.status === 200, 'procurement quotes view loads', `${quotes.status}`);
 
+// ── 8. the timer closes the tender by itself ─────────────────────────────────
+// TenderCloserService ticks every 60 s by default; wait up to 75 s.
+console.log('\n== 8. auto-close at the deadline (waits for the API timer, up to 75 s) ==');
+let state = '';
+for (let i = 0; i < 25; i++) {
+  state = sql(`SELECT state FROM proc.rfq WHERE id='${rfqId}'`)[0][0];
+  if (state === 'Closed') break;
+  await new Promise(r => setTimeout(r, 3000));
+}
+check(state === 'Closed', 'tender state moved Open -> Closed without anyone acting', state);
+const aud = sql(`SELECT after->>'bids', reason FROM audit.audit_log
+                  WHERE entity='rfq' AND entity_id='${rfqId}' AND action='tender_close'`);
+check(aud.length === 1 && aud[0][0] === '2', 'one tender_close audit row, 2 bids', JSON.stringify(aud));
+const notes = sql(`SELECT n.title FROM core.notifications n JOIN core.users u ON u.id = n.user_id
+                    WHERE u.email='procurement@pakboxes.pk' AND n.kind='TENDER_CLOSED' AND n.entity_id='${rfqId}'`);
+check(notes.length === 1 && /closed - 2 bids/.test(notes[0][0]), 'procurement notified', JSON.stringify(notes));
+
+// ── 9. manual close is idempotent and procurement-only ───────────────────────
+console.log('\n== 9. POST /rfq/tenders/close-due ==');
+const again = await api('/rfq/tenders/close-due', { method: 'POST', token: procurement });
+check([200, 201].includes(again.status) && !again.data.closed.some(t => t.rfqId === rfqId),
+  'closing again does nothing to an already closed tender', `${again.status} ${JSON.stringify(again.data)}`);
+const vend = await api('/rfq/tenders/close-due', { method: 'POST', token: vendor1 });
+check(vend.status === 403, 'a vendor cannot trigger it', `${vend.status}`);
+const audN = sql(`SELECT count(*) FROM audit.audit_log WHERE entity_id='${rfqId}' AND action='tender_close'`)[0][0];
+check(audN === '1', 'still exactly one audit row', audN);
+
+// ── 10. a closed tender continues into the existing CS flow ──────────────────
+console.log('\n== 10. closed tender -> Ready for CS ==');
+const rcs = await api(`/pr/${prId}/ready-for-cs`, { method: 'POST', token: procurement, body: { remarks: 'tender closed' } });
+check([200, 201].includes(rcs.status), 'Ready for CS accepted on the closed tender',
+  `${rcs.status} ${JSON.stringify(rcs.data).slice(0, 300)}`);
+const after = (await api(`/pr/${prId}`, { token: procurement })).data?.status;
+check(after && after !== 'IN_PROCUREMENT_REVIEW', 'PR moved on from procurement review', after);
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
