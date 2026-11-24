@@ -48,6 +48,8 @@
                     "e2e:render_contract":  "npm run test:web \u0026\u0026 node scripts/render_contract.mjs",
                     "e2e:onboarding_page":  "node scripts/check_onboarding_page.mjs",
                     "e2e:wave4":  "node scripts/e2e_wave4.mjs",
+                    "e2e:tender":  "node scripts/e2e_tender_post.mjs && node scripts/e2e_tender_bid.mjs && node scripts/e2e_tender_sealed.mjs && node scripts/e2e_tender_cs.mjs && node scripts/e2e_vendor_applications.mjs && node scripts/e2e_tender_full.mjs",
+                    "e2e:tender_full":  "node scripts/e2e_tender_full.mjs",
                     "e2e":  "node scripts/e2e_workflow.mjs \u0026\u0026 node scripts/e2e_workflow_web.mjs \u0026\u0026 node scripts/e2e_line_split.mjs \u0026\u0026 node scripts/e2e_wave1.mjs \u0026\u0026 node scripts/e2e_ack.mjs \u0026\u0026 node scripts/e2e_capital.mjs \u0026\u0026 node scripts/e2e_sourcing.mjs \u0026\u0026 node scripts/e2e_quotations.mjs \u0026\u0026 node scripts/e2e_sourcing_card.mjs \u0026\u0026 node scripts/e2e_cs.mjs \u0026\u0026 node scripts/e2e_governance.mjs \u0026\u0026 node scripts/e2e_d365.mjs \u0026\u0026 node scripts/e2e_admin_workflow_web.mjs \u0026\u0026 node scripts/e2e_governance_web.mjs \u0026\u0026 node scripts/e2e_wave4.mjs \u0026\u0026 node scripts/e2e_wave5_admin_web.mjs \u0026\u0026 node scripts/e2e_wave5d_vendor_web.mjs",
                     "db:verify:020":  "docker exec -i procurement-portal-db psql -U proc -d procurementDB -q -f - \u003c db/scripts/verify_020.sql",
                     "db:verify:024":  "docker exec -i procurement-portal-db psql -U proc -d procurementDB -q -f - \u003c db/scripts/verify_024.sql",
