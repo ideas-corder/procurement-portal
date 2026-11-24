@@ -127,6 +127,8 @@ function isoPlusDays(days: number): string {
  * badges the quote "Pending approval". These are the *approved* states, and
  * they sort first when auto-picking the roster.
  */
+import { SEALED_RFQ_SQL, isSealed, maskBids, sealedNote } from './tender.seal';
+
 export const APPROVED_VENDOR_STATES = ['Active', 'Approved'];
 
 /**
@@ -351,8 +353,11 @@ export class RfqService {
                 WHERE i.rfq_id = rf.id AND i.declined) AS declined,
               (SELECT count(DISTINCT q.vendor_id) FROM proc.quotations q
                 WHERE q.rfq_id = rf.id AND q.state <> 'Withdrawn') AS quotes,
+              -- NULL while a tender is sealed: the lowest bid is a price.
+              CASE WHEN ${SEALED_RFQ_SQL} THEN NULL ELSE
               (SELECT min(q.normalized_total_pkr) FROM proc.quotations q
-                WHERE q.rfq_id = rf.id AND q.state <> 'Withdrawn') AS lowest_bid
+                WHERE q.rfq_id = rf.id AND q.state <> 'Withdrawn') END AS lowest_bid,
+              ${SEALED_RFQ_SQL} AS sealed
          FROM proc.rfq rf
          JOIN proc.purchase_requisitions pr ON pr.id = rf.pr_id
          LEFT JOIN core.users u ON u.id = rf.created_by_user_id
@@ -396,6 +401,7 @@ export class RfqService {
         lowest_bid: x.lowest_bid === null || x.lowest_bid === undefined
           ? null
           : Number(x.lowest_bid),
+        sealed: x.sealed === true,
         // The prototype's own two fields.
         status: view.label,
         pill: view.pill,
@@ -672,14 +678,18 @@ export class RfqService {
         // 'invited' | 'open_tender' (migration 076).
         sourcing_mode: (rfq.sourcing_mode ?? 'invited') as string,
         tender_notes: (rfq.tender_notes ?? null) as string | null,
+        // SEALED TENDER (tender.seal.ts): before the deadline every bid price
+        // and term below is nulled for every viewer.
+        sealed: isSealed(rfq),
+        sealed_note: isSealed(rfq) ? sealedNote(rfq.deadline_at) : null,
         status: view.label,
         pill: view.pill,
       },
       // `_lightRosterCard` header: "<n> vendors on this RFQ" + the prominent
       // "RFQ issued: <ts>" pill.
-      roster,
+      roster: isSealed(rfq) ? maskBids(roster) : roster,
       // rfq-detail's "Vendors & quotes" bid rows, and the locked winner.
-      bids: live,
+      bids: isSealed(rfq) ? maskBids(live) : live,
       winner,
       roster_tally: {
         received: recv,
@@ -1553,7 +1563,10 @@ export class RfqService {
 
     const rfqId = rf.rows[0].id;
     const detail = await this.buildDetail(rfqId, ctx);
-    const quotes = await this.liveQuotes(rfqId, ctx);
+    // Sealed tender: buildDetail() already masked the roster; the live quotes
+    // are masked here the same way.
+    const quotesRaw = await this.liveQuotes(rfqId, ctx);
+    const quotes = detail.rfq.sealed ? maskBids(quotesRaw) : quotesRaw;
     const winner = await this.lockedWinner(prId, ctx);
     // W5-G: a split lock has no `vendor_id`, so `findIndex` would match nothing
     // and `selectedQuoteIndex` stays -1, leaving the card on its "select
@@ -1601,6 +1614,9 @@ export class RfqService {
           biddingClosed: detail.rfq.sourcing_mode === 'open_tender'
             && (detail.rfq.state !== 'Open'
               || (detail.rfq.deadline_at ? new Date(detail.rfq.deadline_at).getTime() <= Date.now() : false)),
+          // Before the deadline bid prices are hidden from everyone.
+          sealed: detail.rfq.sealed,
+          sealedNote: detail.rfq.sealed_note,
         },
         // The prototype's flat quotes[] — one entry per vendor, holding the
         // LIVE version only. The full chain is in `roster[].versions`.

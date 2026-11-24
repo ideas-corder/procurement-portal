@@ -1,4 +1,5 @@
 import { createHash } from 'crypto';
+import { isSealed, maskBids, sealedNote } from './tender.seal';
 import { Injectable, NotFoundException, BadRequestException, ForbiddenException, ConflictException } from '@nestjs/common';
 import { DbService, type SessionContext } from '../db/db.service';
 import { pgIntArray } from '../db/pg-array';
@@ -832,7 +833,7 @@ export class QuotationService {
    */
   async forPr(prId: string, userId: string, role: string, costCenterIds: string[]) {
     const rfq = await this.db.query<any>(
-      `SELECT rf.id, rf.rfq_number, rf.state, rf.currency
+      `SELECT rf.id, rf.rfq_number, rf.state, rf.currency, rf.sourcing_mode, rf.deadline_at
          FROM proc.rfq rf
         WHERE rf.pr_id = $1::uuid
         ORDER BY rf.created_at DESC LIMIT 1`,
@@ -992,14 +993,19 @@ export class QuotationService {
     const received = vendors.filter((v: any) => v.active !== null).length;
     const total = invited.rows.length;
 
+    // SEALED TENDER (tender.seal.ts): prices and terms hidden before the deadline.
+    const sealed = isSealed(rf);
     return {
       rfq: {
         id: rf.id,
         rfq_number: rf.rfq_number,
         state: rf.state,
         currency: rf.currency,
+        sourcing_mode: rf.sourcing_mode ?? 'invited',
+        sealed,
+        sealed_note: sealed ? sealedNote(rf.deadline_at) : null,
       },
-      vendors,
+      vendors: sealed ? maskBids(vendors) : vendors,
       // What the vendors were actually asked to price, in the RFQ's own words.
       lines: rfqLines.rows.map((l: any) => ({
         line_no: Number(l.line_no),

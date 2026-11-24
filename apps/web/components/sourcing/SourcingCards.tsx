@@ -114,6 +114,9 @@ export type Sourcing = {
       tenderNotes?: string | null;
       /** Open tender past its deadline: no more bids can come in. */
       biddingClosed?: boolean;
+      /** Open tender before its deadline: bid prices and terms are withheld by the API. */
+      sealed?: boolean;
+      sealedNote?: string | null;
     } | null;
     quotes: SourcingQuote[];
     selectedQuoteIndex: number;
@@ -221,6 +224,14 @@ export function ProcurementCard({ s }: { s: Sourcing }) {
             {rfq.tenderNotes && (
               <div className="text-sm text-mute" style={{ marginTop: 6, whiteSpace: 'pre-wrap' }}>
                 {rfq.tenderNotes}
+              </div>
+            )}
+            {rfq.sealed && (
+              <div className="alert info" style={{ marginTop: 8, marginBottom: 0 }} data-sealed-note="">
+                <div>
+                  <b>Sealed bids.</b> You can see who has bid, but not their prices or terms, until the
+                  deadline. Bids open for everyone at once when bidding closes.
+                </div>
               </div>
             )}
           </div>
@@ -337,11 +348,15 @@ export function ProcurementCard({ s }: { s: Sourcing }) {
                       <td style={{ padding: '6px 4px' }}>
                         <StackedCell
                           versions={versions}
-                          render={v => (
+                          render={v => ((v as any).sealed || v.total_amount === null
+                            // Sealed tender: the API sends no price before the
+                            // deadline. "0" would read as a zero bid.
+                            ? <span className="pill draft" data-sealed-total="" title="Sealed until the tender deadline">Sealed</span>
+                            : (
                             <span title={`V${v.version} total (${versionStateWord(v)})`}>
                               <b>{Number(v.total_amount || 0).toLocaleString('en-US')}</b>
                             </span>
-                          )}
+                          ))}
                         />
                       </td>
                       <td style={{ padding: '6px 4px' }}>

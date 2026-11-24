@@ -100,10 +100,13 @@ check(await page.locator('[data-tender-state="closed"]').isVisible(), 'card: Clo
 check(await page.locator('[data-notification-count]').isVisible(), 'bell shows an unread count');
 await page.click('[data-notification-bell] button');
 await page.waitForSelector('[data-notification-item]');
-const first = await page.locator('[data-notification-item]').first().textContent();
-check(/Tender RFQ-.* closed - 0 bids/.test(first), 'newest notification is this tender closing', first);
+// Match THIS tender's notification, not merely the newest: the API timer may
+// close another test's tender at the same moment.
+const rfqNumber = sql(`SELECT rfq_number FROM proc.rfq WHERE id='${rfqId}'`);
+const mine = page.locator('[data-notification-item]', { hasText: `Tender ${rfqNumber} closed - 0 bids` });
+check(await mine.count() === 1, 'the bell lists this tender closing', rfqNumber);
 await page.screenshot({ path: `${SHOTS}/4-bell-open.png` });
-await page.locator('[data-notification-item]').first().click();
+await mine.first().click();
 await page.waitForURL(/\/rfq\//, { timeout: 15000 });
 check(page.url().includes(`/rfq/${rfqId}`), 'clicking it opens the RFQ page');
 await page.screenshot({ path: `${SHOTS}/5-rfq-page.png` });

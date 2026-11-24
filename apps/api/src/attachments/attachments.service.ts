@@ -2,6 +2,7 @@ import {
   BadRequestException, ForbiddenException, Injectable, InternalServerErrorException,
   Logger, NotFoundException, PayloadTooLargeException,
 } from '@nestjs/common';
+import { SEALED_RFQ_SQL } from '../sourcing/tender.seal';
 import { DbService } from '../db/db.service';
 import { roleAllowed } from '@procurement/roles';
 import { createReadStream } from 'node:fs';
@@ -306,6 +307,26 @@ export class AttachmentsService {
     const row = r.rows[0];
     if (row.status === 'VOID') {
       throw new NotFoundException('that attachment has been voided');
+    }
+
+    // SEALED TENDER: a vendor's quotation document shows its prices, so it stays
+    // closed until the tender's deadline, like the prices themselves
+    // (sourcing/tender.seal.ts).
+    const sealed = await this.db.query<any>(
+      `SELECT rf.rfq_number, rf.deadline_at
+         FROM proc.quotation_attachments qa
+         JOIN proc.quotations q ON q.id = qa.quotation_id
+         JOIN proc.rfq rf ON rf.id = q.rfq_id
+        WHERE qa.attachment_id = $1::uuid AND ${SEALED_RFQ_SQL}
+        LIMIT 1`,
+      [id],
+      { role, userId, costCenterIds, bypassRls: true },
+    );
+    if (sealed.rows.length > 0) {
+      throw new ForbiddenException(
+        `This is a bid document on sealed tender ${sealed.rows[0].rfq_number}. ` +
+        `It opens when the deadline passes (${sealed.rows[0].deadline_at}).`,
+      );
     }
 
     // absolute() re-checks containment and throws rather than escaping the root.

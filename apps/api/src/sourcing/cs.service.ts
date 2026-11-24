@@ -9,6 +9,7 @@ import { lockPack } from '../governance/pack.lock';
 import { parseJsonb } from './rfq.status';
 import { CsReviewService } from './cs.review.service';
 import { CS_DRAFT_STAGES, isCsDraftStage } from './cs.stages';
+import { SEALED_RFQ_SQL } from './tender.seal';
 // Where the SINGLE/SPLIT decision is made. Shared with the CS review chain's
 // confirm(), because the two locks used to answer this differently — one reasoned
 // from the matrix winner, the other hardcoded SPLIT — and a one-vendor statement
@@ -117,6 +118,22 @@ export class CsService {
       throw new BadRequestException(
         `${p.pr_number} is at ${p.status}; a Comparative Statement is built from a live ` +
         `competition, so it can only be generated at ${CS_DRAFT_STAGES.join(' or ')}.`,
+      );
+    }
+
+    // SEALED TENDER: a CS ranks bids by price, so building one before the
+    // deadline would open the sealed bids early (tender.seal.ts).
+    const sealed = await this.db.query<any>(
+      `SELECT rf.rfq_number, rf.deadline_at FROM proc.rfq rf
+        WHERE rf.pr_id = $1::uuid AND rf.state <> 'Cancelled' AND ${SEALED_RFQ_SQL}
+        LIMIT 1`,
+      [prId],
+      ctx,
+    );
+    if (sealed.rows.length > 0) {
+      throw new BadRequestException(
+        `${p.pr_number} cannot have a CS yet: tender ${sealed.rows[0].rfq_number} is sealed until ` +
+        `${sealed.rows[0].deadline_at}. Bids open when the deadline passes.`,
       );
     }
 
